@@ -1,0 +1,26 @@
+# Local planning material and machine-specific files
+local/
+.DS_Store
+
+# Python environments, build products, and test/tool caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+
+# codewhy's per-scanned-project cache
+.codewhy/
+
+# Local credentials and configuration overrides
+.env
+.env.*
+!.env.example
