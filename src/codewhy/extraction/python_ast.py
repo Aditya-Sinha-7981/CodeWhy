@@ -166,7 +166,8 @@ def _warning(exception: Exception, source: str) -> str:
         line = getattr(exception, "end_lineno", None)
     if line is None:
         line = 1 if source else 0
-    message = str(exception) or exception.__class__.__name__
+    # SyntaxError's str() already appends "(file, line N)"; use the bare message.
+    message = getattr(exception, "msg", None) or str(exception) or exception.__class__.__name__
     return f"{exception.__class__.__name__}: {message} (line {line})"
 
 

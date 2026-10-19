@@ -20,6 +20,9 @@ _GRAMMAR_EXTENSIONS = {
     ".tsx": "tsx",
 }
 
+# `class` is the node for `export default class { ... }` (no name).
+_CLASS_TYPES = {"class_declaration", "abstract_class_declaration", "class"}
+
 
 def _language_for(extension: str) -> Any:
     from tree_sitter import Language
@@ -89,7 +92,7 @@ def _declaration(node: Any) -> Any | None:
         if child.type in {
             "function_declaration",
             "generator_function_declaration",
-            "class_declaration",
+            *_CLASS_TYPES,
             "lexical_declaration",
             "interface_declaration",
             "type_alias_declaration",
@@ -124,6 +127,11 @@ def _jsdoc(source: bytes, node: Any) -> str | None:
             return re.sub(r"\s+", " ", value).strip() or None
         index -= 1
     return None
+
+
+def _is_async(node: Any) -> bool:
+    """True when the function node itself carries the `async` keyword token."""
+    return any(child.type == "async" for child in node.children)
 
 
 def _signature(source: bytes, node: Any, target: Any | None = None) -> str:
@@ -164,14 +172,16 @@ def _signature(source: bytes, node: Any, target: Any | None = None) -> str:
 
 def _function_info(source: bytes, node: Any, name: str | None = None, target: Any | None = None) -> FunctionInfo:
     function_name = name or _identifier(node, source)
-    declaration_text = _text(source, node)
+    function_node = target if target is not None else node
+    if function_node.type == "variable_declarator":
+        function_node = _field(function_node, "value") or function_node
     return FunctionInfo(
         name=function_name,
         signature=_signature(source, node, target),
         docstring=_jsdoc(source, node),
         start_line=_line(node),
         end_line=_end_line(node),
-        is_async=bool(re.search(r"\basync\b", declaration_text.split("{", 1)[0])),
+        is_async=_is_async(function_node),
     )
 
 
@@ -189,7 +199,7 @@ def _class_info(source: bytes, node: Any) -> ClassInfo:
                         docstring=_jsdoc(source, child),
                         start_line=_line(child),
                         end_line=_end_line(child),
-                        is_async=bool(re.search(r"\basync\b", _text(source, child).split("{", 1)[0])),
+                        is_async=_is_async(child),
                     )
                 )
     bases: list[str] = []
@@ -252,7 +262,8 @@ def _imports(source: bytes, root: Any) -> tuple[ImportInfo, ...]:
             clause = next((child for child in _named_children(node) if child.type == "import_clause"), None)
             names = () if clause is None else _binding_names(clause, source, {"identifier", "namespace_import", "import_specifier"})
             found.append(
-                ImportInfo("js", module, names, 0, _line(node), _text(source, node).lstrip().startswith("import type"))
+                # `import type` has an anonymous `type` token; `import typeorm` does not.
+                ImportInfo("js", module, names, 0, _line(node), any(c.type == "type" and not c.is_named for c in node.children))
             )
         elif node.type == "export_statement":
             module_node = _field(node, "source")
@@ -288,7 +299,7 @@ def _definitions(source: bytes, root: Any) -> list[tuple[Any, Any, str, str]]:
             continue
         if declaration.type in {"function_declaration", "generator_function_declaration"}:
             result.append((node, declaration, _identifier(declaration, source, "default"), "function"))
-        elif declaration.type == "class_declaration":
+        elif declaration.type in _CLASS_TYPES:
             result.append((node, declaration, _identifier(declaration, source), "class"))
         elif declaration.type in {"arrow_function", "function_expression"}:
             result.append((node, declaration, "default", "function"))
@@ -319,7 +330,7 @@ def _units(source: bytes, root: Any, line_count: int, path: str) -> tuple[UnitIn
         seen_statements.add(statement_key)
         declaration = _declaration(node)
         children: tuple[UnitInfo, ...] = ()
-        if declaration is not None and declaration.type == "class_declaration":
+        if declaration is not None and declaration.type in _CLASS_TYPES:
             body = _field(declaration, "body")
             methods = [] if body is None else [child for child in _named_children(body) if child.type == "method_definition"]
             child_units: list[UnitInfo] = []
