@@ -1,0 +1,26 @@
+# .toolignore: files and folders codewhy should not document.
+#
+# Syntax is the same as .gitignore: one pattern per line, `#` starts a comment,
+# a trailing `/` matches folders only, `*` and `**` are wildcards, and a leading
+# `!` re-includes something an earlier pattern excluded.
+#
+# codewhy never reads .gitignore. A file you ignore from git (generated code,
+# local scripts) is still documented unless it is listed here.
+#
+# Built-in ignores always apply before this file: node_modules/ .venv/ venv/
+# __pycache__/ .git/ dist/ build/ .next/ *.min.js *.d.ts .pytest_cache/
+# .mypy_cache/ .idea/ .vscode/
+#
+# To document a folder a built-in ignores, re-include it. For example, if your
+# own source code lives in build/:
+# !build/
+#
+# Note: you cannot re-include a single file inside an ignored folder
+# (`!build/keep.py` has no effect while build/ itself is ignored), same as git.
+#
+# codewhy's own files (.codewhy/, the output folder, PROJECT_DOCS.md,
+# codewhy.toml, .toolignore) are always excluded and cannot be re-included.
+
+# Examples:
+# tests/fixtures/
+# *.generated.ts
