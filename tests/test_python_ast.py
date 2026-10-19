@@ -99,3 +99,37 @@ def test_empty_python_file_has_no_units() -> None:
     assert result.line_count == 0
     assert result.top_level_units == ()
     assert result.status == "ok"
+
+
+def test_imports_inside_type_checking_and_try_except_are_collected() -> None:
+    source = """from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pkg.types import Token
+
+try:
+    import ujson as json
+except ImportError:
+    import json
+
+
+def parse(text):
+    from .lexer import lex
+    return lex(text)
+"""
+    result = extract_python("parser.py", source)
+
+    assert [(item.module, item.names, item.level, item.line) for item in result.imports] == [
+        ("typing", ("TYPE_CHECKING",), 0, 1),
+        ("pkg.types", ("Token",), 0, 4),
+        ("ujson", (), 0, 7),
+        ("json", (), 0, 9),
+        ("lexer", ("lex",), 1, 13),
+    ]
+
+
+def test_syntax_error_warning_names_line_once() -> None:
+    result = extract_python("broken.py", "x = 1\ndef broken(:\n    pass\n")
+
+    assert result.status == "skipped"
+    assert result.warning == "SyntaxError: invalid syntax (line 2)"

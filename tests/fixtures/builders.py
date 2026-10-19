@@ -1,10 +1,70 @@
+"""Fixture projects built in code (docs/TESTS.md -> Fixture projects).
+
+These cannot be committed: the repo's own .gitignore would swallow
+node_modules/, .venv/, and build/ directories.
+"""
+
 from __future__ import annotations
 
 import warnings
 from pathlib import Path
 
+from tests.helpers import make_project
 
-def build_broken_files(tmp_path: Path, max_file_bytes: int = 32) -> Path:
+# Paths discovery must return as source files for build_ignored_content.
+IGNORED_CONTENT_SOURCES = [
+    "app/models.py",
+    "build/release.py",
+    "main.py",
+    "scripts/deploy.py",
+    "web/index.js",
+]
+
+
+def build_ignored_content(tmp_path: Path) -> Path:
+    """A project mixing healthy sources with everything discovery must skip."""
+    return make_project(
+        tmp_path,
+        {
+            "main.py": "from app.models import Order\n\n\ndef run() -> None:\n    print(Order(3).total())\n",
+            "app/models.py": (
+                "class Order:\n"
+                "    def __init__(self, qty: int) -> None:\n"
+                "        self.qty = qty\n\n"
+                "    def total(self) -> int:\n"
+                "        return self.qty * 10\n"
+            ),
+            "web/index.js": "import { render } from 'react-dom';\nexport function start() { render(); }\n",
+            # Listed in .gitignore, which codewhy must never read: still documented.
+            "scripts/deploy.py": "import subprocess\n\nsubprocess.run(['echo', 'deploy'])\n",
+            ".gitignore": "scripts/\nnode_modules/\n",
+            # Built-in ignores.
+            "node_modules/left-pad/index.js": "module.exports = (s) => s;\n",
+            ".venv/lib/site.py": "import sys\n",
+            "dist/bundle.min.js": "var a=1;\n",
+            "types/api.d.ts": "export interface Api { get(): void }\n",
+            # User-owned build/ folder, re-included via !build/ below.
+            "build/release.py": "VERSION = '1.0'\n",
+            # Custom .toolignore pattern.
+            "generated/schema_pb2.py": "DESCRIPTOR = None\n",
+            ".toolignore": "# project-specific\ngenerated/\n!build/\n",
+        },
+    )
+
+
+# Paths of build_broken_files grouped by what discovery/extraction must do with them.
+BROKEN_FILES_HEALTHY = ["healthy.js", "healthy.py"]
+BROKEN_FILES_EMPTY = "__init__.py"
+BROKEN_FILES_SYNTAX_ERROR = "syntax_error.py"
+BROKEN_FILES_DISCOVERY_SKIPS = [("invalid_utf8.py", "undecodable"), ("oversized.py", "too_large")]
+
+
+def build_broken_files(tmp_path: Path, max_file_bytes: int = 64) -> Path:
+    """Broken and healthy files side by side; scan with `extraction.max_file_bytes = max_file_bytes`.
+
+    Every file except `oversized.py` stays under `max_file_bytes`, so only the
+    intended files are skipped for size.
+    """
     root = tmp_path / "broken_files"
     root.mkdir()
     (root / "syntax_error.py").write_text("def broken(:\n    pass\n", encoding="utf-8")

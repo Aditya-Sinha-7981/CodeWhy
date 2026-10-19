@@ -1,0 +1,44 @@
+# codewhy configuration. Every key is optional; the values shown are the defaults.
+# Run `codewhy config show` to see the resolved configuration.
+
+[llm]
+provider = "ollama"              # "ollama" | "openai-compat" | "gemini"
+# model = "qwen2.5-coder:14b"    # default for ollama only; hosted providers require a model
+host = "http://localhost:11434"  # ollama only
+# context_tokens = 16384         # default: 16384 for ollama, 32768 for openai-compat/gemini
+max_output_tokens = 1024
+temperature = 0
+seed = 0
+timeout_seconds = 300
+max_transient_retries = 3        # network errors, 429, 5xx (exponential backoff, honors Retry-After)
+
+# --- gemini preset (Google's OpenAI-compatible endpoint; set a model id) ---
+# provider = "gemini"
+# model = "<model id>"              # required, no default shipped
+# (fills in: base_url, api_key_env = "GEMINI_API_KEY", structured_output = "schema",
+#  reasoning_effort = "low", send_seed = false, context_tokens = 32768)
+
+# --- generic openai-compat example (no default model is shipped; set one) ---
+# provider = "openai-compat"
+# base_url = "https://<provider-host>/v1"
+# api_key_env = "CODEWHY_API_KEY"   # name of the env var; the key itself is never stored in the file
+# model = "<model id>"
+# context_tokens = 32768
+# structured_output = "prompt"      # "schema" | "json" | "prompt"
+# send_seed = false                 # some endpoints reject unknown parameters
+# reasoning_effort = "low"          # optional; omitted from requests when unset
+# acknowledge_remote = false        # true = never prompt about sending code to the endpoint
+
+[output]
+mode = "single-file"             # "single-file" | "docs-tree" | "both"
+dir = "codewhy-docs"             # docs-tree output directory (inside the scanned folder)
+single_file_name = "PROJECT_DOCS.md"
+token_budget = 20000             # single-file only: target size of PROJECT_DOCS.md in tokens
+
+[extraction]
+languages = ["python", "javascript", "typescript"]
+max_file_bytes = 500000          # larger supported files are skipped with a warning
+
+[project]
+# Optional explicit entry point (project-relative path). Always overrides detection.
+# entry_point = "src/main.py"

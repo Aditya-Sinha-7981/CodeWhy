@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codewhy"
+dynamic = ["version"]
+description = "Explain a local Python/JS/TS codebase as one paste-ready Markdown file."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "pathspec>=0.12",
+  "pydantic>=2",
+  "tree-sitter>=0.23",
+  "tree-sitter-javascript>=0.23",
+  "tree-sitter-typescript>=0.23",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-mock>=3",
+]
+
+[project.scripts]
+codewhy = "codewhy.cli:app"
+
+[tool.hatch.version]
+path = "src/codewhy/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codewhy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers"
+markers = [
+  "live_llm: talks to a real model; skipped unless selected with -m live_llm",
+]

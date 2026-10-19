@@ -126,3 +126,68 @@ def test_each_variable_declarator_uses_its_own_syntax_node() -> None:
         ("first", "const first = () =>"),
         ("second", "const second = function(value)"),
     ]
+
+
+def test_import_type_detected_from_syntax_not_text() -> None:
+    source = 'import typeorm from "typeorm";\nimport type { User } from "./user";\nimport { load } from "./load";\n'
+
+    result = extract_typescript("db.ts", source)
+
+    assert [(item.module, item.is_type_only) for item in result.imports] == [
+        ("typeorm", False),
+        ("./user", True),
+        ("./load", False),
+    ]
+
+
+def test_abstract_and_anonymous_default_classes_are_extracted() -> None:
+    source = """export abstract class Shape {
+  abstract area(): number;
+  describe() { return "shape"; }
+}
+
+export default class {
+  run() {}
+}
+"""
+    result = extract_typescript("shapes.ts", source)
+
+    assert [(item.name, [method.name for method in item.methods]) for item in result.classes] == [
+        ("Shape", ["describe"]),
+        ("default", ["run"]),
+    ]
+    assert [(unit.name, unit.kind, unit.start_line, unit.end_line) for unit in result.top_level_units] == [
+        ("Shape", "class", 1, 4),
+        ("default", "class", 5, 8),
+    ]
+
+
+def test_async_comes_from_the_function_itself() -> None:
+    source = """const outer = () => async () => 1;
+const direct = async (value) => value;
+export async function load() {}
+function plain() { return async () => 1; }
+class Api { async fetch() {} send() { const f = async () => 1; } }
+"""
+    result = extract_typescript("async.js", source)
+
+    assert [(item.name, item.is_async) for item in result.functions] == [
+        ("outer", False),
+        ("direct", True),
+        ("load", True),
+        ("plain", False),
+    ]
+    assert [(item.name, item.is_async) for item in result.classes[0].methods] == [("fetch", True), ("send", False)]
+
+
+def test_multiline_signature_collapses_whitespace_without_changing_tokens() -> None:
+    source = """export function add(
+  first: number,
+  second: number,
+): number {
+  return first + second;
+}
+"""
+    result = extract_typescript("math.ts", source)
+
+    assert result.functions[0].signature == "export function add( first: number, second: number, ): number"

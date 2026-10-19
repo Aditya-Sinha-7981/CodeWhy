@@ -1,5 +1,5 @@
 # Local planning material and machine-specific files
-local/
+/local/
 .DS_Store
 
 # Python environments, build products, and test/tool caches
@@ -14,8 +14,10 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
-build/
-dist/
+# Anchored to the repo root so committed test fixtures named build/ or dist/
+# (used by ignore tests in later tasks) are not swallowed.
+/build/
+/dist/
 
 # codewhy's per-scanned-project cache
 .codewhy/
