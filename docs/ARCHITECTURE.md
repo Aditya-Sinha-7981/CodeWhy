@@ -343,8 +343,10 @@ generated for them. README files get no special treatment in v1.
   class methods, and exported defaults.
 - Shared `FileStructure` dataclass so Layers 2+ never branch on language.
   Fields: `path`, `language`, `source_text`, `line_count`, `functions`,
-  `classes`, `imports`, `top_level_units`, `status` (`ok` | `skipped`),
-  `warning`.
+  `classes`, `types`, `imports`, `top_level_units`, `status` (`ok` |
+  `skipped`), `warning`. `types` lists TypeScript interfaces, type aliases, and
+  enums (name, kind, line range) so they appear in "Defined Here"; it is always
+  empty for Python and JavaScript.
 - `top_level_units`: ordered `(name, kind, start_line, end_line, children)`
   covering the file contiguously. Module-level statements and imports between
   definitions attach to the **following** unit (trailing ones to the last).
