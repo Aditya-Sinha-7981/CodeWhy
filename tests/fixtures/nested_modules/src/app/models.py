@@ -1,0 +1,3 @@
+class Model:
+    name = "model"
+
