@@ -372,9 +372,12 @@ external dependency, not rendered in docs, visible through `inspect`.
 For an import in file `F` (directory `D`, project root `R`):
 
 - **Relative** (`from . import x`, `from ..a import b`, level `n`): base dir is
-  `D` going up `n-1` levels. For `from .a import b` try `<base>/a.py`, then
-  `<base>/a/__init__.py`. For `from . import x` try, per imported name,
-  `<base>/x.py`, `<base>/x/__init__.py`, else `<base>/__init__.py`.
+  `D` going up `n-1` levels. For `from .a import b` try, per imported name,
+  the submodule `<base>/a/b.py` / `<base>/a/b/__init__.py` first (as for
+  absolute imports below), else `<base>/a.py`, then `<base>/a/__init__.py`.
+  For `from . import x` try, per imported name, `<base>/x.py`,
+  `<base>/x/__init__.py`, else `<base>/__init__.py`. Targets are the sorted
+  union over the imported names; `*` targets the module file itself.
 - **Absolute** (`import a.b.c`, `from a.b import c`): try search roots in
   order — `D`, `R`, `R/src` (the first is what makes flat scripts like
   `main.py` doing `import utils` work). In each root, take the dotted name and

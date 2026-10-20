@@ -81,6 +81,9 @@ def resolve_js_import(
             base = posixpath.normpath(posixpath.join(posixpath.dirname(importer_path), specifier))
         if _escapes_root(base):
             return Unresolved("relative", specifier)
+        if base == ".":
+            # normpath spells the project root "."; "" makes the root's index.* reachable.
+            base = ""
 
         target = _candidate(base, project_paths)
         if target is None:
