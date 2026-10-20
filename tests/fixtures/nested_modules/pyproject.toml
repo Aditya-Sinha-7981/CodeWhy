@@ -1,0 +1,3 @@
+[project.scripts]
+codewhy-demo = "app.cli:main"
+

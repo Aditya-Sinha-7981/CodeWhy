@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import posixpath
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import networkx as nx
+
 from codewhy.config import Config
+from codewhy.entrypoint import detect_entry_point
+from codewhy.extraction import extract_all
+from codewhy.extraction.model import FileStructure
+from codewhy.graph.builder import build_graph
 from codewhy.ignore import Skip, SourceFile, discover
 
 ROOT_MODULE = "."
@@ -26,6 +32,9 @@ class ProjectModel:
     modules: list[Module]
     other_files: list[str]
     skips: list[Skip]
+    structures: dict[str, FileStructure] = field(default_factory=dict)
+    graph: nx.DiGraph = field(default_factory=nx.DiGraph)
+    entry_point: str | None = None
 
 
 def module_path_of(file_path: str) -> str:
@@ -45,6 +54,19 @@ def build_project(root: Path, config: Config) -> ProjectModel:
     resolved = root.resolve()
     result = discover(resolved, config)
     files = {f.path: f for f in result.files}
+    structures = extract_all(files.values())
+    graph = build_graph(structures)
+    project = ProjectModel(
+        root=resolved,
+        name=resolved.name,
+        files=files,
+        modules=group_modules(list(files)),
+        other_files=result.other_files,
+        skips=result.skips,
+        structures=structures,
+        graph=graph,
+    )
+    entry_point = detect_entry_point(project, config)
     return ProjectModel(
         root=resolved,
         name=resolved.name,
@@ -52,4 +74,7 @@ def build_project(root: Path, config: Config) -> ProjectModel:
         modules=group_modules(list(files)),
         other_files=result.other_files,
         skips=result.skips,
+        structures=structures,
+        graph=graph,
+        entry_point=entry_point,
     )
