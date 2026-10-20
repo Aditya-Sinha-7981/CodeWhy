@@ -162,7 +162,7 @@ def test_scan_stub_reports_counts_and_writes_nothing(tmp_path: Path) -> None:
     result = run_cli(["scan", str(root)])
     assert result.exit_code == 0, result.stderr
     assert result.stdout.splitlines() == [
-        "Found 5 source files in 5 modules (2 skipped, 1 other files). "
+        "Found 5 source files in 5 modules with 1 import edges (2 skipped, 1 other files). "
         "The documentation pipeline is not implemented yet.",
         "skipped bad.py (undecodable)",
         "skipped huge.js (too_large)",
@@ -174,7 +174,7 @@ def test_scan_defaults_to_current_directory(tmp_path: Path) -> None:
     make_project(tmp_path, {"main.py": ""})
     result = run_cli(["scan"], cwd=tmp_path)
     assert result.exit_code == 0
-    assert result.stdout.startswith("Found 1 source files in 1 modules (0 skipped, 0 other files).")
+    assert result.stdout.startswith("Found 1 source files in 1 modules with 0 import edges (0 skipped, 0 other files).")
 
 
 @pytest.mark.parametrize("target", ["missing", "file.py"])

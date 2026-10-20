@@ -113,15 +113,16 @@ def config_show(
 
 @app.command()
 def scan(path: PathArg = Path(".")) -> None:
-    """Document the project in PATH. (Stub: reports discovery results only.)"""
+    """Document the project in PATH. (Stub: reports discovery and graph results only.)"""
     root = require_dir(path)
     config = load_or_fail(root)
     try:
         project = build_project(root, config)
-    except DiscoveryError as exc:
+    except (ConfigError, DiscoveryError) as exc:
         fail(str(exc))
     typer.echo(
         f"Found {len(project.files)} source files in {len(project.modules)} modules "
+        f"with {project.graph.number_of_edges()} import edges "
         f"({len(project.skips)} skipped, {len(project.other_files)} other files). "
         "The documentation pipeline is not implemented yet."
     )

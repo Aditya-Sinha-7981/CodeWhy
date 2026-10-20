@@ -120,8 +120,20 @@ def test_nested_fixture_has_expected_full_edge_list() -> None:
             "src/app/services/service.py -> src/app/utils.py",
             "src/app/utils.py -> src/app/models.py",
             "src/app/worker.py -> src/app/api/routes.py",
+            "src/app/worker.py -> src/app/services/service.py",
+            "src/app/worker.py -> src/plugins/registry.py",
+            "src/plugins/loader.py -> src/app/core.py",
+            "src/plugins/registry.py -> src/plugins/loader.py",
             "web/components/Button.tsx -> web/shared.ts",
             "web/components/index.ts -> web/components/Button.tsx",
             "web/main.js -> web/components/index.ts",
         ]
     )
+    assert most_depended_on(project.graph) == [
+        ("src/app/core.py", 4),
+        ("src/app/services/service.py", 4),
+        ("src/app/api/routes.py", 3),
+        ("src/app/utils.py", 2),
+        ("src/app/models.py", 1),
+    ]
+    assert external_dependencies(project.graph, frozenset(project.graph.nodes)) == ["os", "react", "requests"]

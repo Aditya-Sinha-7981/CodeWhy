@@ -76,8 +76,20 @@ def _resolve_relative(
         return Unresolved("relative", _relative_name(imp))
 
     if imp.module:
-        target = _rooted_candidates(base, _module_path(imp.module), project_paths)
-        return Resolved((target,)) if target else Unresolved("relative", _relative_name(imp))
+        # `from .a import b`: per name prefer the submodule `a/b.py`, else the
+        # file for `a` itself (the same rule as absolute `from a import b`).
+        module_base = _module_path(imp.module)
+        package = _rooted_candidates(base, module_base, project_paths)
+        targets = set()
+        for name in imp.names:
+            child = _rooted_candidates(base, f"{module_base}/{name}", project_paths) if name != "*" else None
+            if child or package:
+                targets.add(child or package)
+        if not targets and package:
+            targets.add(package)
+        if targets:
+            return Resolved(tuple(sorted(targets)))
+        return Unresolved("relative", _relative_name(imp))
 
     targets: set[str] = set()
     missing = False
@@ -113,7 +125,7 @@ def _resolve_absolute(
     if not module:
         return Unresolved("external", "")
 
-    for root in _absolute_roots(importer_path,):
+    for root in _absolute_roots(importer_path):
         if imp.names:
             targets: set[str] = set()
             base_target = _match_longest(root, module, project_paths)
@@ -121,7 +133,11 @@ def _resolve_absolute(
                 if name == "*":
                     continue
                 child = _match_longest(root, f"{module}.{name}", project_paths)
-                targets.add(child or base_target) if child or base_target else None
+                if child or base_target:
+                    targets.add(child or base_target)
+            if not targets and base_target:
+                # Only `*` was imported: the module file itself is the target.
+                targets.add(base_target)
             if targets:
                 return Resolved(tuple(sorted(targets)))
         else:

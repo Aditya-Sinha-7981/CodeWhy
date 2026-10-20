@@ -71,3 +71,10 @@ def test_malformed_module_returns_external_without_raising() -> None:
     malformed = ImportInfo("js", cast(Any, None), (), 0, 1, False)
 
     assert resolve_js_import("main.js", malformed, frozenset({"main.js"})) == Unresolved("external", "")
+
+
+def test_directory_import_of_the_project_root_uses_root_index() -> None:
+    paths = frozenset({"index.ts", "y.ts", "sub/x.ts"})
+
+    for importer, specifier in [("y.ts", "."), ("y.ts", "./"), ("sub/x.ts", ".."), ("sub/x.ts", "../"), ("sub/x.ts", "/")]:
+        assert resolve_js_import(importer, import_info(specifier), paths) == Resolved(("index.ts",)), (importer, specifier)

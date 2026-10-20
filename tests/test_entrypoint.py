@@ -125,3 +125,64 @@ def test_no_entry_point_returns_none(tmp_path: Path) -> None:
     make_project(tmp_path, {"module.py": ""})
 
     assert detect(tmp_path) is None
+
+
+@pytest.mark.parametrize("metadata", ["pyproject.toml", "package.json"])
+def test_non_utf8_metadata_warns_and_falls_through(tmp_path: Path, metadata: str, caplog: pytest.LogCaptureFixture) -> None:
+    make_project(tmp_path, {metadata: b"\xff\xfe\x00", "main.py": ""})
+
+    assert detect(tmp_path) == "main.py"
+    assert metadata in caplog.text
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'project = "x"\n',
+        "[project]\nscripts = 1\n",
+        "tool = 1\n",
+        "[tool]\npoetry = []\n",
+        "[tool.poetry]\nscripts = 'x'\n",
+    ],
+)
+def test_wrongly_shaped_pyproject_is_treated_as_absent(tmp_path: Path, content: str) -> None:
+    make_project(tmp_path, {"pyproject.toml": content, "main.py": ""})
+
+    assert detect(tmp_path) == "main.py"
+
+
+@pytest.mark.parametrize("content", ["[]", '"x"', '{"main": 1}', '{"scripts": 1}', '{"scripts": {"start": 1}}'])
+def test_wrongly_shaped_package_json_is_treated_as_absent(tmp_path: Path, content: str) -> None:
+    make_project(tmp_path, {"package.json": content, "main.py": ""})
+
+    assert detect(tmp_path) == "main.py"
+
+
+def test_metadata_with_utf8_bom_is_read(tmp_path: Path) -> None:
+    make_project(tmp_path, {"package.json": b'\xef\xbb\xbf{"main": "lib/start.js"}', "lib/start.js": "", "main.py": ""})
+
+    assert detect(tmp_path) == "lib/start.js"
+
+
+def test_explicit_entry_point_that_failed_extraction_is_fatal_with_reason(tmp_path: Path) -> None:
+    make_project(tmp_path, {"main.py": "", "broken.py": "def (:\n"})
+
+    with pytest.raises(ConfigError, match=r"project.entry_point 'broken.py' is in the scanned project but was skipped \(SyntaxError"):
+        detect(tmp_path, {"project.entry_point": "broken.py"})
+
+
+def test_explicit_entry_point_skipped_by_discovery_is_fatal_with_reason(tmp_path: Path) -> None:
+    make_project(tmp_path, {"main.py": "", "huge.py": "x = 1\n" * 50})
+
+    with pytest.raises(ConfigError, match=r"project.entry_point 'huge.py' is in the scanned project but was skipped \(too_large\)"):
+        detect(tmp_path, {"project.entry_point": "huge.py", "extraction.max_file_bytes": 100})
+
+
+def test_conventional_entry_point_precedence(tmp_path: Path) -> None:
+    order = ["main.py", "__main__.py", "app.py", "index.js", "index.ts", "src/main.py", "src/index.js", "src/index.ts"]
+    make_project(tmp_path, {name: "" for name in order})
+
+    for expected in order:
+        assert detect(tmp_path) == expected
+        (tmp_path / expected).unlink()
+    assert detect(tmp_path) is None

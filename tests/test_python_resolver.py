@@ -155,3 +155,46 @@ def test_malformed_module_returns_unresolved_without_raising() -> None:
     malformed = ImportInfo("python", cast(Any, None), (), 0, 1, False)
 
     assert resolve_python_import("main.py", malformed, frozenset({"main.py"})) == Unresolved("external", "")
+
+
+def test_relative_from_package_import_prefers_submodule_per_name() -> None:
+    paths = frozenset({"pkg/main.py", "pkg/services/__init__.py", "pkg/services/service.py"})
+
+    assert resolve_python_import("pkg/main.py", import_info("services", ("service",), 1), paths) == Resolved(
+        ("pkg/services/service.py",)
+    )
+    assert resolve_python_import("pkg/main.py", import_info("services", ("helper",), 1), paths) == Resolved(
+        ("pkg/services/__init__.py",)
+    )
+    assert resolve_python_import("pkg/main.py", import_info("services", ("service", "helper"), 1), paths) == Resolved(
+        ("pkg/services/__init__.py", "pkg/services/service.py")
+    )
+
+
+def test_relative_from_namespace_package_resolves_submodule() -> None:
+    paths = frozenset({"pkg/main.py", "pkg/plugins/loader.py"})
+
+    assert resolve_python_import("pkg/main.py", import_info("plugins", ("loader",), 1), paths) == Resolved(
+        ("pkg/plugins/loader.py",)
+    )
+    assert resolve_python_import("pkg/main.py", import_info("plugins", ("missing",), 1), paths) == Unresolved(
+        "relative", ".plugins"
+    )
+
+
+def test_star_imports_resolve_to_the_module_file() -> None:
+    paths = frozenset({"main.py", "utils.py", "pkg/__init__.py", "pkg/mod.py"})
+
+    assert resolve_python_import("main.py", import_info("utils", ("*",)), paths) == Resolved(("utils.py",))
+    assert resolve_python_import("main.py", import_info("pkg", ("*",)), paths) == Resolved(("pkg/__init__.py",))
+    assert resolve_python_import("pkg/mod.py", import_info("", ("*",), 1), paths) == Resolved(("pkg/__init__.py",))
+    assert resolve_python_import("main.py", import_info("pkg", ("*",), 1), paths) == Resolved(("pkg/__init__.py",))
+
+
+def test_absolute_from_namespace_package_resolves_submodule() -> None:
+    paths = frozenset({"src/app/worker.py", "src/plugins/registry.py"})
+
+    assert resolve_python_import("src/app/worker.py", import_info("plugins", ("registry",)), paths) == Resolved(
+        ("src/plugins/registry.py",)
+    )
+    assert resolve_python_import("src/app/worker.py", import_info("plugins"), paths) == Unresolved("external", "plugins")
