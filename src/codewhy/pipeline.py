@@ -15,8 +15,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+import logging
 
 from codewhy.config import Config
+from codewhy.cache.db import CacheDB, CacheIOError, CacheLocked
+from codewhy.cache.keys import FAILED_MEMBER, config_fingerprint, file_key, module_key, project_key
 from codewhy.graph.builder import canonical_edges, external_dependencies, imported_by, imports_of, module_in_degree
 from codewhy.llm.provider import Provider
 from codewhy.project import ROOT_MODULE, ProjectModel
@@ -26,9 +29,11 @@ from codewhy.summarize.project_pass import assemble_project_prompt, module_edges
 from codewhy.summarize.result import Clock, PassResult, RequestCallback, pass_budget
 from codewhy.summarize.schemas import FilePass, ModulePass, ProjectPass
 
+logger = logging.getLogger(__name__)
+
 PROJECT_SUBJECT = ""
 
-# on_item(pass_name, subject, status); status is "generated" or "failed" (task 07 adds "cached").
+# on_item(pass_name, subject, status); status is generated, cached, or failed.
 OnItem = Callable[[str, str, str], None]
 OnStage = Callable[[str, str], None]
 
@@ -41,9 +46,53 @@ class RunResult:
     counts: dict[str, int]  # generated, cached, failed, skipped
 
 
-def run_pass(pass_name: str, subject: str, inputs: object, fn: Callable[[], PassResult]) -> PassResult:
-    """The cache seam. In this task it only runs `fn`."""
-    return fn()
+@dataclass
+class _CacheCall:
+    """Private cache context; the public PassResult shape remains unchanged."""
+
+    cache: CacheDB
+    key: str
+    fn: Callable[[], PassResult]
+    full: bool
+    enabled: list[bool]
+    status: str | None = None
+
+    def __call__(self) -> PassResult:
+        return self.fn()
+
+
+def _cache_warning(exc: Exception) -> None:
+    logger.warning("cache unavailable; continuing without cache: %s", exc)
+
+
+def run_pass(pass_name: str, subject: str, key: object, fn: Callable[[], PassResult]) -> PassResult:
+    """Run one pass through the private cache context when supplied."""
+    if not isinstance(fn, _CacheCall):
+        return fn()
+    call = fn
+    if call.enabled[0] and not call.full:
+        try:
+            cached = call.cache.lookup(pass_name, subject, call.key)
+        except CacheLocked:
+            raise
+        except CacheIOError as exc:
+            call.enabled[0] = False
+            _cache_warning(exc)
+        else:
+            if cached is not None:
+                call.status = "cached"
+                return cached
+    result = call.fn()
+    call.status = "failed" if result.failure is not None else "generated"
+    if call.enabled[0] and result.failure is None:
+        try:
+            call.cache.store(pass_name, subject, call.key, result)
+        except CacheLocked:
+            raise
+        except CacheIOError as exc:
+            call.enabled[0] = False
+            _cache_warning(exc)
+    return result
 
 
 def run_pipeline(
@@ -54,13 +103,58 @@ def run_pipeline(
     clock: Clock,
     on_item: OnItem | None = None,
     on_stage: OnStage | None = None,
+    full: bool = False,
+    use_cache: bool = True,
 ) -> RunResult:
+    """Run the three summarization stages and always close the cache."""
+    cache = CacheDB(project.root / ".codewhy" / "cache.db")
+    try:
+        return _run_pipeline(
+            project,
+            provider,
+            config,
+            cache=cache,
+            clock=clock,
+            on_item=on_item,
+            on_stage=on_stage,
+            full=full,
+            use_cache=use_cache,
+        )
+    finally:
+        cache.close()
+
+
+def _run_pipeline(
+    project: ProjectModel,
+    provider: Provider,
+    config: Config,
+    *,
+    cache: CacheDB,
+    clock: Clock,
+    on_item: OnItem | None = None,
+    on_stage: OnStage | None = None,
+    full: bool = False,
+    use_cache: bool = True,
+) -> RunResult:
+    cache_enabled = [use_cache]
+    config_fp = config_fingerprint(
+        {
+            "provider": config.llm.provider,
+            "model": config.llm.effective_model,
+            "context_tokens": config.llm.effective_context_tokens,
+            "max_output_tokens": config.llm.effective_max_output_tokens,
+            "temperature": config.llm.temperature,
+            "seed": config.llm.seed,
+            "reasoning_effort": config.llm.reasoning_effort,
+            "structured_output": config.llm.structured_output,
+        }
+    )
     graph = project.graph
     budget = pass_budget(config)
     counts = {"generated": 0, "cached": 0, "failed": 0, "skipped": 0}
 
-    def record(pass_name: str, subject: str, result: PassResult) -> PassResult:
-        status = "failed" if result.failure is not None else "generated"
+    def record(pass_name: str, subject: str, result: PassResult, status: str | None = None) -> PassResult:
+        status = status or ("failed" if result.failure is not None else "generated")
         counts[status] += 1
         if on_item is not None:
             on_item(pass_name, subject, status)
@@ -93,7 +187,8 @@ def run_pipeline(
             clock=clock,
             on_request=request_callback,
         )
-        files[path] = record("file", path, run_pass("file", path, inputs, fn))
+        call = _CacheCall(cache, file_key(config_fp, path, fs.source_text, imports, users), fn, full, cache_enabled)
+        files[path] = record("file", path, run_pass("file", path, inputs, call), call.status)
     if on_stage is not None:
         on_stage("file generation", f"complete: {len(file_subjects)} items")
 
@@ -130,7 +225,20 @@ def run_pipeline(
             clock=clock,
             on_request=request_callback,
         )
-        modules[module.path] = record("module", module.path, run_pass("module", module.path, assembled.inputs, fn))
+        key_files = [
+            [path, FAILED_MEMBER if path in files and files[path].failure is not None else text]
+            for path, text in assembled.inputs.get("files", [])
+        ]
+        key = module_key(
+            config_fp,
+            assembled.inputs.get("module", module.path),
+            key_files,
+            assembled.inputs.get("edges", ""),
+            assembled.inputs.get("external", []),
+            assembled.inputs.get("omitted", 0),
+        )
+        call = _CacheCall(cache, key, fn, full, cache_enabled)
+        modules[module.path] = record("module", module.path, run_pass("module", module.path, assembled.inputs, call), call.status)
     if on_stage is not None:
         on_stage("module generation", f"complete: {len(ordered_modules)} items")
 
@@ -161,7 +269,24 @@ def run_pipeline(
     )
     if on_stage is not None:
         on_stage("project generation", "started: 1 item")
-    project_result = record("project", PROJECT_SUBJECT, run_pass("project", PROJECT_SUBJECT, assembled.inputs, fn))
+    key = project_key(
+        config_fp,
+        assembled.inputs.get("entry_point"),
+        assembled.inputs.get("modules", []),
+        canonical_edges(graph),
+        assembled.inputs.get("other_files", []),
+    )
+    call = _CacheCall(cache, key, fn, full, cache_enabled)
+    project_result = record("project", PROJECT_SUBJECT, run_pass("project", PROJECT_SUBJECT, assembled.inputs, call), call.status)
     if on_stage is not None:
         on_stage("project generation", "complete: 1 item")
+    if cache_enabled[0]:
+        try:
+            cache.delete_missing("file", set(files))
+            cache.delete_missing("module", set(modules))
+            cache.delete_missing("project", {PROJECT_SUBJECT})
+        except CacheLocked:
+            raise
+        except CacheIOError as exc:
+            _cache_warning(exc)
     return RunResult(files=files, modules=modules, project=project_result, counts=counts)

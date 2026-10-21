@@ -23,7 +23,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def run(root: Path, fake: FakeProvider | None = None):
     project = build_project(root, Config())
-    return project, run_pipeline(project, fake or FakeProvider(), Config(), clock=lambda: FIXED_TIME)
+    return project, run_pipeline(project, fake or FakeProvider(), Config(), clock=lambda: FIXED_TIME, use_cache=False)
 
 
 @pytest.mark.parametrize(

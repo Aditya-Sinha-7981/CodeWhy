@@ -131,7 +131,7 @@ def test_file_prompts_never_contain_neighbor_summaries() -> None:
 
     # Module and project calls get plain text for whatever fields their schema requires.
     fake = FakeProvider(respond=lambda call: respond(call) or {k: "text." for k in call.schema["required"]})
-    run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME)
+    run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME, use_cache=False)
     file_prompts = [call.prompt for call in fake.calls if "## Full source" in call.prompt]
     assert len(file_prompts) == 3
     for prompt in file_prompts:

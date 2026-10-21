@@ -132,7 +132,7 @@ def test_a_twice_malformed_file_fails_and_the_run_continues() -> None:
         return {name: "Text." for name in call.schema["required"]}
 
     fake = FakeProvider(respond=respond)
-    result = run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME)
+    result = run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME, use_cache=False)
     assert result.files["solver.py"].failure is not None
     assert result.files["solver.py"].failure.startswith("invalid output after one retry")
     assert result.files["main.py"].failure is None
@@ -147,5 +147,5 @@ def test_configuration_errors_abort_the_whole_run(error) -> None:
     project = build_project(FIXTURES / "flat_scripts", Config())
     fake = FakeProvider(errors={1: error})
     with pytest.raises(type(error)):
-        run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME)
+        run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME, use_cache=False)
     assert len(fake.calls) == 2

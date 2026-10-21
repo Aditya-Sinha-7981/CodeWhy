@@ -19,7 +19,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def run(project, fake=None, on_item=None):
     fake = fake or FakeProvider()
-    return run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME, on_item=on_item), fake
+    return run_pipeline(project, fake, Config(), clock=lambda: FIXED_TIME, on_item=on_item, use_cache=False), fake
 
 
 @pytest.fixture(scope="module")

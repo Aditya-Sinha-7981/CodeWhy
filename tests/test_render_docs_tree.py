@@ -25,7 +25,7 @@ def parse_frontmatter(text: str) -> dict[str, str]:
 def tree_for(fixture: str = "flat_scripts") -> dict[str, str]:
     config = Config()
     project = build_project(FIXTURES / fixture, config)
-    run = run_pipeline(project, FakeProvider(), config, clock=lambda: FIXED_TIME)
+    run = run_pipeline(project, FakeProvider(), config, clock=lambda: FIXED_TIME, use_cache=False)
     return render_docs_tree(project, run, config, version=VERSION)
 
 
