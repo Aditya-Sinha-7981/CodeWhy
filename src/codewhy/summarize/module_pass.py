@@ -26,7 +26,7 @@ from codewhy.llm.budget import fits
 from codewhy.llm.provider import Provider
 from codewhy.project import Module
 from codewhy.summarize.prompts import module_prompt
-from codewhy.summarize.result import Clock, PassFailed, PassResult, call_pass, pass_budget
+from codewhy.summarize.result import Clock, PassFailed, PassResult, RequestCallback, call_pass, pass_budget
 from codewhy.summarize.schemas import ModulePass
 from codewhy.text import first_sentence
 
@@ -158,6 +158,7 @@ def execute(
     provider: Provider,
     config: Config,
     clock: Clock,
+    on_request: RequestCallback | None = None,
 ) -> PassResult:
     """Send an assembled prompt and wrap the outcome as a PassResult."""
     if assembled.prompt is None:
@@ -169,6 +170,7 @@ def execute(
             model_cls,
             budget=pass_budget(config),
             max_output_tokens=config.llm.effective_max_output_tokens,
+            on_request=on_request,
         )
     except PassFailed as exc:
         return PassResult.failed(exc.reason, clock())

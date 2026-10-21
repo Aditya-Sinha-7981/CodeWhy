@@ -5,6 +5,7 @@ from __future__ import annotations
 import posixpath
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 
 import networkx as nx
 
@@ -16,6 +17,7 @@ from codewhy.graph.builder import build_graph
 from codewhy.ignore import Skip, SourceFile, discover
 
 ROOT_MODULE = "."
+StageCallback = Callable[[str, str], None]
 
 
 @dataclass(frozen=True)
@@ -50,12 +52,25 @@ def group_modules(paths: list[str]) -> list[Module]:
     return [Module(path=m, files=sorted(grouped[m])) for m in order]
 
 
-def build_project(root: Path, config: Config) -> ProjectModel:
+def build_project(root: Path, config: Config, *, on_stage: StageCallback | None = None) -> ProjectModel:
+    def stage(name: str, detail: str) -> None:
+        if on_stage is not None:
+            on_stage(name, detail)
+
     resolved = root.resolve()
+    stage("discovery", "started")
     result = discover(resolved, config)
+    stage(
+        "discovery",
+        f"complete: {len(result.files)} supported, {len(result.skips)} skipped, {len(result.other_files)} other",
+    )
     files = {f.path: f for f in result.files}
+    stage("extraction", f"started: {len(files)} files")
     structures = extract_all(files.values())
+    stage("extraction", f"complete: {len(structures)} files")
+    stage("graph", "started")
     graph = build_graph(structures)
+    stage("graph", f"complete: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
     project = ProjectModel(
         root=resolved,
         name=resolved.name,

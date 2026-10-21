@@ -29,6 +29,7 @@ from codewhy.summarize.schemas import provider_schema
 logger = logging.getLogger(__name__)
 
 Clock = Callable[[], datetime]
+RequestCallback = Callable[[str, str], None]
 Model = TypeVar("Model", bound=BaseModel)
 
 RETRY_TEMPERATURE = 0.2
@@ -94,6 +95,7 @@ def call_pass(
     budget: int,
     max_output_tokens: int,
     temperature: float | None = None,
+    on_request: RequestCallback | None = None,
 ) -> Model:
     """One validated result from `provider`, retrying malformed output once. Raises PassFailed.
 
@@ -105,11 +107,19 @@ def call_pass(
     schema = provider_schema(model_cls)
     attempt_prompt, attempt_temperature = prompt, temperature
     for attempt in (1, 2):
+        if on_request is not None:
+            on_request(
+                "started",
+                f"attempt {attempt}/2; prompt ~{estimate_tokens(attempt_prompt)} tokens; output cap {max_output_tokens}",
+            )
+        completed = False
         try:
             raw = provider.generate_json(
                 attempt_prompt, schema, max_output_tokens=max_output_tokens, temperature=attempt_temperature
             )
-            return model_cls.model_validate(raw)
+            result = model_cls.model_validate(raw)
+            completed = True
+            return result
         except TransientError as exc:
             raise PassFailed(f"provider unavailable: {exc}") from None
         except (MalformedOutput, ValidationError) as exc:
@@ -119,4 +129,7 @@ def call_pass(
             logger.debug("malformed %s output; retrying once", model_cls.__name__)
             attempt_prompt = prompt + retry_suffix(error)
             attempt_temperature = RETRY_TEMPERATURE
+        finally:
+            if on_request is not None:
+                on_request("complete" if completed else "failed", f"attempt {attempt}/2")
     raise AssertionError("unreachable")

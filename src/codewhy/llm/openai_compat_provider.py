@@ -119,6 +119,7 @@ class OpenAICompatProvider:
             max_retries=self.max_retries,
             sleep=self.sleep,
             endpoint_label=self.endpoint_label,
+            timeout_seconds=self.timeout,
         )
         self._raise_for_status(response, key)
         data = response_json(response, self.endpoint_label)
@@ -188,6 +189,11 @@ class OpenAICompatProvider:
             )
         except httpx.UnsupportedProtocol:
             raise ProviderError(f"llm.base_url {self.base_url!r} is not a valid URL; it must start with https://") from None
+        except httpx.TimeoutException:
+            raise ProviderError(
+                f"Timed out contacting {self.endpoint_label} after {min(self.timeout, PREFLIGHT_TIMEOUT_SECONDS):g} seconds. "
+                f"Check {self.base_url} and the provider status."
+            ) from None
         except httpx.TransportError:
             raise ProviderError(
                 f"Cannot reach {self.endpoint_label} ({self.base_url}). Check llm.base_url and your network connection."

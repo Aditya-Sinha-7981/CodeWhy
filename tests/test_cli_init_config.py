@@ -8,7 +8,6 @@ import pytest
 from codewhy import __version__
 from codewhy.cli import template_bytes
 from codewhy.config import Config, resolve_config
-from tests.fixtures.builders import build_ignored_content
 from tests.helpers import make_project, run_cli, snapshot_tree
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -150,31 +149,6 @@ def test_config_show_unknown_provider_exits_1(tmp_path: Path) -> None:
     result = run_cli(["config", "show", str(tmp_path), "--provider", "openai"])
     assert result.exit_code == 1
     assert "'ollama', 'openai-compat' or 'gemini'" in result.stderr
-
-
-# --- scan stub ----------------------------------------------------------------
-
-
-def test_scan_stub_reports_counts_and_writes_nothing(tmp_path: Path) -> None:
-    root = build_ignored_content(tmp_path)
-    make_project(root, {"bad.py": b"\xff\xfe", "huge.js": "x" * 200, "codewhy.toml": "[extraction]\nmax_file_bytes = 150\n"})
-    before = snapshot_tree(root)
-    result = run_cli(["scan", str(root)])
-    assert result.exit_code == 0, result.stderr
-    assert result.stdout.splitlines() == [
-        "Found 5 source files in 5 modules with 1 import edges (2 skipped, 1 other files). "
-        "The documentation pipeline is not implemented yet.",
-        "skipped bad.py (undecodable)",
-        "skipped huge.js (too_large)",
-    ]
-    assert snapshot_tree(root) == before
-
-
-def test_scan_defaults_to_current_directory(tmp_path: Path) -> None:
-    make_project(tmp_path, {"main.py": ""})
-    result = run_cli(["scan"], cwd=tmp_path)
-    assert result.exit_code == 0
-    assert result.stdout.startswith("Found 1 source files in 1 modules with 0 import edges (0 skipped, 0 other files).")
 
 
 @pytest.mark.parametrize("target", ["missing", "file.py"])

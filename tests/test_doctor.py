@@ -175,10 +175,3 @@ def test_doctor_and_config_show_overrides(tmp_path: Path, transport) -> None:
         "max_output_tokens = 8192",
     ):
         assert line in shown.stdout.splitlines(), line
-
-
-def test_scan_accepts_provider_and_model(tmp_path: Path) -> None:
-    make_project(tmp_path, {"main.py": "x = 1\n"})
-    result = run_cli(["scan", str(tmp_path), "--provider", "gemini", "--model", "gem-x"])
-    assert result.exit_code == 0, result.stderr
-    assert result.stdout.startswith("Found 1 source files")

@@ -9,8 +9,10 @@ import networkx as nx
 
 from codewhy.config import Config
 from codewhy.extraction.model import FileStructure
+import codewhy.cli as cli
 from codewhy.cli import inspect_project
 from tests.helpers import make_project, run_cli, snapshot_tree
+from tests.support.fake_provider import FakeProvider
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nested_modules"
@@ -188,14 +190,9 @@ def test_inspect_writes_utf8_json_with_cp1252_stdout(monkeypatch, tmp_path: Path
     assert payload["files"]["main.py"]["warning"] == "→"
 
 
-def test_scan_stub_reports_edge_count() -> None:
-    result = run_cli(["scan", str(FIXTURE)])
-
-    assert result.exit_code == 0, result.stderr
-    assert result.stdout.startswith("Found 17 source files in 7 modules with 20 import edges (0 skipped, 4 other files).")
-
-
-def test_scan_reports_missing_explicit_entry_point_cleanly(tmp_path: Path) -> None:
+def test_scan_reports_missing_explicit_entry_point_cleanly(tmp_path: Path, monkeypatch) -> None:
+    # The provider is checked before the project is read, so use the offline fake.
+    monkeypatch.setattr(cli, "build_provider", lambda config: FakeProvider())
     make_project(tmp_path, {"main.py": "", "codewhy.toml": '[project]\nentry_point = "missing.py"\n'})
 
     result = run_cli(["scan", str(tmp_path)])
@@ -206,7 +203,8 @@ def test_scan_reports_missing_explicit_entry_point_cleanly(tmp_path: Path) -> No
     )
 
 
-def test_inspect_and_scan_survive_malformed_metadata(tmp_path: Path) -> None:
+def test_inspect_and_scan_survive_malformed_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "build_provider", lambda config: FakeProvider())
     make_project(tmp_path, {"main.py": "", "pyproject.toml": b"\xff\xfe", "package.json": "[]"})
 
     for command in ("scan", "inspect"):

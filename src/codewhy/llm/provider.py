@@ -130,6 +130,7 @@ def send_with_retries(
     max_retries: int,
     sleep: Sleep,
     endpoint_label: str,
+    timeout_seconds: float | None = None,
 ) -> httpx.Response:
     """Run `send`, retrying transient failures; return the first non-transient response.
 
@@ -145,7 +146,13 @@ def send_with_retries(
             raise ProviderError(
                 f"invalid endpoint URL for {endpoint_label} ({exc}); it must start with http:// or https://"
             ) from None
-        except httpx.TransportError as exc:  # connection errors and timeouts
+        except httpx.TimeoutException:
+            last = (
+                f"request timed out after {timeout_seconds:g} seconds"
+                if timeout_seconds is not None
+                else "request timed out"
+            )
+        except httpx.TransportError as exc:  # connection errors and other transport errors
             last = f"{type(exc).__name__}"
         else:
             if not is_transient_status(response.status_code):
