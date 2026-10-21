@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 
 from codewhy.config import Config
 from codewhy.graph.builder import canonical_edges, external_dependencies, imported_by, imports_of, module_in_degree
@@ -23,13 +24,36 @@ from codewhy.project import ROOT_MODULE, ProjectModel
 from codewhy.summarize.file_pass import run_file_pass
 from codewhy.summarize.module_pass import UNAVAILABLE, assemble_module_prompt, execute
 from codewhy.summarize.project_pass import assemble_project_prompt, module_edges_text
-from codewhy.summarize.result import Clock, PassResult, pass_budget
+from codewhy.summarize.result import Clock, PassResult, RequestCallback, pass_budget
 from codewhy.summarize.schemas import FilePass, ModulePass, ProjectPass
 
 PROJECT_SUBJECT = ""
 
 # on_item(pass_name, subject, status); status is "generated" or "failed" (task 07 adds "cached").
 OnItem = Callable[[str, str, str], None]
+OnStage = Callable[[str, str], None]
+DEFAULT_PROVIDER_WORKERS = 2
+
+
+def _provider_workers(provider: Provider) -> int:
+    """Use bounded concurrency only for providers that explicitly opt in."""
+    return DEFAULT_PROVIDER_WORKERS if getattr(provider, "supports_concurrency", False) else 1
+
+
+def _run_independent(jobs: list[tuple[str, Callable[[], PassResult]]], provider: Provider) -> dict[str, PassResult]:
+    """Run independent jobs with bounded workers and return results in job order.
+
+    Results are collected in the original sorted order, so provider completion
+    order never affects progress output, dictionaries, summaries, or rendering.
+    Exceptions retain the existing pipeline behavior when the corresponding
+    future is observed.
+    """
+    workers = _provider_workers(provider)
+    if workers == 1 or len(jobs) < 2:
+        return {subject: fn() for subject, fn in jobs}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="codewhy-pass") as executor:
+        futures = [(subject, executor.submit(fn)) for subject, fn in jobs]
+        return {subject: future.result() for subject, future in futures}
 
 
 @dataclass
@@ -52,6 +76,7 @@ def run_pipeline(
     *,
     clock: Clock,
     on_item: OnItem | None = None,
+    on_stage: OnStage | None = None,
 ) -> RunResult:
     graph = project.graph
     budget = pass_budget(config)
@@ -65,6 +90,7 @@ def run_pipeline(
         return result
 
     files: dict[str, PassResult] = {}
+    file_jobs: list[tuple[str, Callable[[], PassResult]]] = []
     for path in sorted(project.structures):
         fs = project.structures[path]
         if fs.status != "ok":
@@ -73,8 +99,28 @@ def run_pipeline(
         imports = imports_of(graph, path) if path in graph else []
         users = imported_by(graph, path) if path in graph else []
         inputs = {"path": path, "source_text": fs.source_text, "imports": imports, "imported_by": users}
-        fn = partial(run_file_pass, fs, imports, users, provider=provider, config=config, clock=clock)
-        files[path] = record("file", path, run_pass("file", path, inputs, fn))
+        request_callback: RequestCallback | None = None
+        if on_stage is not None:
+            request_callback = lambda status, detail, path=path: on_stage(
+                f"file request {path}", f"{status}: {detail}"
+            )
+        fn = partial(
+            run_file_pass,
+            fs,
+            imports,
+            users,
+            provider=provider,
+            config=config,
+            clock=clock,
+            on_request=request_callback,
+        )
+        file_jobs.append((path, partial(run_pass, "file", path, inputs, fn)))
+    if on_stage is not None:
+        on_stage("file generation", f"started: {len(file_jobs)} items")
+    for path, result in _run_independent(file_jobs, provider).items():
+        files[path] = record("file", path, result)
+    if on_stage is not None:
+        on_stage("file generation", f"complete: {len(file_jobs)} items")
 
     purposes = {
         path: result.data.purpose
@@ -82,6 +128,7 @@ def run_pipeline(
         if isinstance(result.data, FilePass)
     }
     modules: dict[str, PassResult] = {}
+    module_jobs: list[tuple[str, Callable[[], PassResult]]] = []
     for module in sorted(project.modules, key=lambda m: (m.path != ROOT_MODULE, m.path)):
         members = frozenset(module.files)
         assembled = assemble_module_prompt(
@@ -92,8 +139,27 @@ def run_pipeline(
             {path: graph.in_degree(path) if path in graph else 0 for path in module.files},
             budget=budget,
         )
-        fn = partial(execute, assembled, ModulePass, provider=provider, config=config, clock=clock)
-        modules[module.path] = record("module", module.path, run_pass("module", module.path, assembled.inputs, fn))
+        request_callback = None
+        if on_stage is not None:
+            request_callback = lambda status, detail, path=module.path: on_stage(
+                f"module request {path}", f"{status}: {detail}"
+            )
+        fn = partial(
+            execute,
+            assembled,
+            ModulePass,
+            provider=provider,
+            config=config,
+            clock=clock,
+            on_request=request_callback,
+        )
+        module_jobs.append((module.path, partial(run_pass, "module", module.path, assembled.inputs, fn)))
+    if on_stage is not None:
+        on_stage("module generation", f"started: {len(module_jobs)} items")
+    for path, result in _run_independent(module_jobs, provider).items():
+        modules[path] = record("module", path, result)
+    if on_stage is not None:
+        on_stage("module generation", f"complete: {len(module_jobs)} items")
 
     responsibilities = {
         path: result.data.responsibility if isinstance(result.data, ModulePass) else UNAVAILABLE
@@ -108,6 +174,21 @@ def run_pipeline(
         project.other_files,
         budget=budget,
     )
-    fn = partial(execute, assembled, ProjectPass, provider=provider, config=config, clock=clock)
+    request_callback = None
+    if on_stage is not None:
+        request_callback = lambda status, detail: on_stage("project request", f"{status}: {detail}")
+    fn = partial(
+        execute,
+        assembled,
+        ProjectPass,
+        provider=provider,
+        config=config,
+        clock=clock,
+        on_request=request_callback,
+    )
+    if on_stage is not None:
+        on_stage("project generation", "started: 1 item")
     project_result = record("project", PROJECT_SUBJECT, run_pass("project", PROJECT_SUBJECT, assembled.inputs, fn))
+    if on_stage is not None:
+        on_stage("project generation", "complete: 1 item")
     return RunResult(files=files, modules=modules, project=project_result, counts=counts)

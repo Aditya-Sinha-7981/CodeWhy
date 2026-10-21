@@ -44,6 +44,7 @@ class FakeProvider:
         is_remote: bool = False,
         endpoint_label: str = "fake-provider",
         preflight_error: ProviderError | None = None,
+        supports_concurrency: bool = False,
     ) -> None:
         self.respond = respond
         self.results: deque[Result] = deque(results or ())
@@ -51,6 +52,7 @@ class FakeProvider:
         self.is_remote = is_remote
         self.endpoint_label = endpoint_label
         self.preflight_error = preflight_error
+        self.supports_concurrency = supports_concurrency
         self.calls: list[Call] = []
         self.preflight_calls = 0
 

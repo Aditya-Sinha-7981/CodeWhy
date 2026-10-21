@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 from importlib.resources import files as package_files
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import sys
+import threading
+import time
 from typing import Annotated, NoReturn
 
 import typer
 
 from codewhy import __version__
 from codewhy.config import CONFIG_FILE_NAME, Config, ConfigError, render_toml, resolve_config
+from codewhy.consent import ConsentError, ensure_remote_ack
 from codewhy.ignore import TOOLIGNORE_FILE_NAME, DiscoveryError
 from codewhy.graph.builder import imported_by, imports_of, most_depended_on
 from codewhy.llm.budget import prompt_budget
 from codewhy.llm.provider import ProviderError, build_provider
+from codewhy.pipeline import run_pipeline
 from codewhy.project import build_project
+from codewhy.render.docs_tree import OutputError, render_docs_tree, write_outputs
+from codewhy.render.single_file import render_single_file
 
 app = typer.Typer(
     name="codewhy",
@@ -37,6 +44,7 @@ INIT_TEMPLATES: tuple[tuple[str, str], ...] = (
 PathArg = Annotated[Path, typer.Argument(help="Project folder.", show_default=True)]
 ProviderOpt = Annotated[str | None, typer.Option(help="Override llm.provider (ollama, openai-compat, gemini).")]
 ModelOpt = Annotated[str | None, typer.Option(help="Override llm.model.")]
+OutputOpt = Annotated[str | None, typer.Option("--output", help="Output mode: single-file, docs-tree, or both.")]
 
 
 def fail(message: str) -> NoReturn:
@@ -141,22 +149,104 @@ def doctor(path: PathArg = Path("."), provider: ProviderOpt = None, model: Model
 
 
 @app.command()
-def scan(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
-    """Document the project in PATH. (Stub: reports discovery and graph results only.)"""
+def scan(
+    path: PathArg = Path("."),
+    provider: ProviderOpt = None,
+    model: ModelOpt = None,
+    output: OutputOpt = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Acknowledge sending source to a remote endpoint.")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite non-CodeWhy output files.")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress per-item progress lines.")] = False,
+    full: Annotated[bool, typer.Option("--full", help="Regenerate all passes (accepted as a no-op before caching).")] = False,
+) -> None:
+    """Document the project in PATH."""
     root = require_dir(path)
-    config = load_or_fail(root, {"llm.provider": provider, "llm.model": model})
+    config = load_or_fail(root, {"llm.provider": provider, "llm.model": model, "output.mode": output})
+    target = None
     try:
-        project = build_project(root, config)
-    except (ConfigError, DiscoveryError) as exc:
+        target = build_provider(config)
+        stage_started: dict[str, float] = {}
+        stage_lock = threading.Lock()
+
+        def on_stage(stage: str, detail: str) -> None:
+            if quiet:
+                return
+            with stage_lock:
+                if detail.startswith("started"):
+                    stage_started[stage] = time.perf_counter()
+                    typer.echo(f"{stage}: {detail}")
+                    return
+                elapsed = ""
+                started = stage_started.pop(stage, None)
+                if started is not None:
+                    elapsed = f" ({time.perf_counter() - started:.2f}s)"
+                typer.echo(f"{stage}: {detail}{elapsed}")
+
+        if not quiet:
+            # Provider preflight can wait for a configured network timeout. Give
+            # the user immediate feedback while keeping preflight before any
+            # project discovery or source-file reads.
+            typer.echo(f"checking provider {target.endpoint_label}...")
+        ensure_remote_ack(
+            target,
+            assume_yes=yes,
+            acknowledged_in_config=config.llm.acknowledge_remote,
+            is_tty=sys.stdin.isatty(),
+            ask=lambda message: typer.confirm(message, default=False),
+            tell=typer.echo,
+        )
+        on_stage("provider preflight", "started")
+        target.preflight()
+        on_stage("provider preflight", "complete")
+        project = build_project(root, config, on_stage=on_stage)
+        if not project.files:
+            fail("No supported source files found (supported: .py .js .jsx .mjs .cjs .ts .tsx .mts .cts)")
+
+        total = sum(1 for structure in project.structures.values() if structure.status == "ok") + len(project.modules) + 1
+        index = 0
+
+        def on_item(pass_name: str, subject: str, status: str) -> None:
+            nonlocal index
+            index += 1
+            if not quiet:
+                typer.echo(f"[{index}/{total}] {pass_name} {subject} ({status})")
+
+        run_result = run_pipeline(
+            project, target, config, clock=lambda: datetime.now(UTC), on_item=on_item, on_stage=on_stage
+        )
+        targets: dict[str, str] = {}
+        rendered = None
+        if config.output.mode in {"single-file", "both"}:
+            rendered = render_single_file(project, run_result, config, version=__version__)
+            targets[config.output.single_file_name] = rendered.text
+        if config.output.mode in {"docs-tree", "both"}:
+            tree = render_docs_tree(project, run_result, config, version=__version__)
+            prefix = config.output.dir.rstrip("/") + "/"
+            targets.update({prefix + relative: text for relative, text in tree.items()})
+        write_outputs(root, targets, output_dir=config.output.dir if config.output.mode in {"docs-tree", "both"} else None, force=force)
+        for skip in sorted(project.skips, key=lambda item: item.path):
+            typer.echo(f"skipped {skip.path} ({skip.reason})")
+        skipped = len(project.skips) + run_result.counts["skipped"]
+        generated = run_result.counts["generated"]
+        failed = run_result.counts["failed"]
+        if rendered is not None:
+            typer.echo(f"{len(project.files)} files, {generated} generated, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
+            if rendered.over_budget:
+                typer.echo("warning: Level 2 output exceeds the configured token budget.", err=True)
+        else:
+            typer.echo(f"{len(project.files)} files, {generated} generated, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
+        if skipped or failed:
+            raise typer.Exit(2)
+    except KeyboardInterrupt:
+        typer.echo("scan interrupted; no output was written.", err=True)
+        raise typer.Exit(130) from None
+    except (ConfigError, ConsentError, ProviderError, DiscoveryError, OutputError) as exc:
         fail(str(exc))
-    typer.echo(
-        f"Found {len(project.files)} source files in {len(project.modules)} modules "
-        f"with {project.graph.number_of_edges()} import edges "
-        f"({len(project.skips)} skipped, {len(project.other_files)} other files). "
-        "The documentation pipeline is not implemented yet."
-    )
-    for skip in project.skips:
-        typer.echo(f"skipped {skip.path} ({skip.reason})")
+    finally:
+        if target is not None:
+            close = getattr(target, "close", None)
+            if close is not None:
+                close()
 
 
 def echo_utf8(message: str) -> None:

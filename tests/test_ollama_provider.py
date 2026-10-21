@@ -164,6 +164,19 @@ def test_zero_retries_means_one_attempt() -> None:
     assert sleeps == []
 
 
+def test_generation_timeout_error_names_configured_duration() -> None:
+    timeout_extensions: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeout_extensions.append(request.extensions["timeout"])
+        raise httpx.ReadTimeout("slow", request=request)
+
+    provider, _ = make(handler, timeout_seconds=4, max_transient_retries=0)
+    with pytest.raises(TransientError, match=r"timed out after 4 seconds"):
+        provider.generate_json("p", SCHEMA, max_output_tokens=10)
+    assert timeout_extensions == [{"connect": 4.0, "read": 4.0, "write": 4.0, "pool": 4.0}]
+
+
 # --- preflight -------------------------------------------------------------------------
 
 
@@ -182,6 +195,24 @@ def test_preflight_unreachable_host_says_ollama_serve() -> None:
     assert str(info.value) == (
         "Cannot reach Ollama at http://localhost:11434. Start it with `ollama serve` (or install from ollama.com)."
     )
+
+
+def test_preflight_timeout_error_names_fixed_duration() -> None:
+    timeout_extensions: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeout_extensions.append(request.extensions["timeout"])
+        raise httpx.ReadTimeout("slow", request=request)
+
+    provider, _ = make(handler)
+    with pytest.raises(ProviderError, match=r"Timed out contacting Ollama .* after 10 seconds"):
+        provider.preflight()
+    assert timeout_extensions == [{"connect": 10.0, "read": 10.0, "write": 10.0, "pool": 10.0}]
+
+
+def test_ollama_does_not_opt_into_parallel_generation() -> None:
+    provider, _ = make(healthy())
+    assert provider.supports_concurrency is False
 
 
 def test_preflight_missing_model_says_ollama_pull() -> None:

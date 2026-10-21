@@ -16,7 +16,7 @@ from codewhy.llm.budget import estimate_tokens, fits
 from codewhy.llm.chunking import CONTEXT_TOO_SMALL, Chunk, ContextTooSmall, plan_chunks, source_lines
 from codewhy.llm.provider import Provider
 from codewhy.summarize.prompts import chunk_prompt, combine_prompt, file_prompt, longest_backtick_run, top_level_names
-from codewhy.summarize.result import Clock, PassFailed, PassResult, call_pass, pass_budget
+from codewhy.summarize.result import Clock, PassFailed, PassResult, RequestCallback, call_pass, pass_budget
 from codewhy.summarize.schemas import FilePass
 from codewhy.text import first_sentence
 
@@ -75,11 +75,12 @@ def run_file_pass(
     provider: Provider,
     config: Config,
     clock: Clock,
+    on_request: RequestCallback | None = None,
 ) -> PassResult:
     if is_effectively_empty(fs.source_text, fs.language):
         return PassResult.ok(FilePass(purpose=EMPTY_FILE_PURPOSE), clock())
     try:
-        data = _summarize(fs, imports, imported_by, provider=provider, config=config)
+        data = _summarize(fs, imports, imported_by, provider=provider, config=config, on_request=on_request)
     except ContextTooSmall:
         return PassResult.failed(CONTEXT_TOO_SMALL, clock())
     except PassFailed as exc:
@@ -88,13 +89,19 @@ def run_file_pass(
 
 
 def _summarize(
-    fs: FileStructure, imports: Sequence[str], imported_by: Sequence[str], *, provider: Provider, config: Config
+    fs: FileStructure,
+    imports: Sequence[str],
+    imported_by: Sequence[str],
+    *,
+    provider: Provider,
+    config: Config,
+    on_request: RequestCallback | None = None,
 ) -> FilePass:
     budget = pass_budget(config)
     max_out = config.llm.effective_max_output_tokens
 
     def call(prompt: str) -> FilePass:
-        return call_pass(provider, prompt, FilePass, budget=budget, max_output_tokens=max_out)
+        return call_pass(provider, prompt, FilePass, budget=budget, max_output_tokens=max_out, on_request=on_request)
 
     prompt = file_prompt(fs, imports, imported_by, include_source=True)
     if fits(prompt, budget):
