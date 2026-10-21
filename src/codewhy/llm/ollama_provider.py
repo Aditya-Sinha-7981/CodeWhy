@@ -49,11 +49,6 @@ def model_available(wanted: str, installed: set[str]) -> bool:
 
 
 class OllamaProvider:
-    # A local model can consume most of the machine's memory. Keep requests
-    # serial so independent passes do not trigger concurrent model loads or
-    # KV-cache allocations.
-    supports_concurrency = False
-
     def __init__(self, llm: LLMConfig, *, client: httpx.Client, sleep: Sleep) -> None:
         self.host = llm.host.rstrip("/")
         self.model = llm.effective_model or ""
@@ -161,14 +156,17 @@ class OllamaProvider:
         if not model_available(self.model, installed):
             raise ProviderError(f"Model '{self.model}' is not available locally. Run: ollama pull {self.model}")
 
+    def _preflight_timeout(self) -> float:
+        return min(self.timeout, PREFLIGHT_TIMEOUT_SECONDS)
+
     def _preflight_get(self, path: str) -> httpx.Response:
         try:
-            return self.client.get(f"{self.host}{path}", timeout=PREFLIGHT_TIMEOUT_SECONDS)
+            return self.client.get(f"{self.host}{path}", timeout=self._preflight_timeout())
         except httpx.UnsupportedProtocol:
             raise ProviderError(f"llm.host {self.host!r} is not a valid URL; use e.g. http://localhost:11434") from None
         except httpx.TimeoutException:
             raise ProviderError(
-                f"Timed out contacting Ollama at {self.host} after {PREFLIGHT_TIMEOUT_SECONDS:g} seconds. "
+                f"Timed out contacting Ollama at {self.host} after {self._preflight_timeout():g} seconds. "
                 "The server may be overloaded or still loading a model; check `ollama ps` and try again."
             ) from None
         except httpx.TransportError:

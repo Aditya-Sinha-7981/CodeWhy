@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
@@ -22,10 +23,30 @@ PREAMBLE = (
 )
 
 
+# Lines whose first non-space character (after at most 3 spaces) would start a
+# Markdown block that can outlive the paragraph: an ATX heading (`#`), a code
+# fence (``` or ~~~, which swallows the rest of the document when unclosed), or
+# an HTML block (`<`, e.g. an unclosed `<!--`).
+_BLOCK_START = re.compile(r"^( {0,3})([#`~<])")
+# A line of only `=`, `-`, `*` or `_` (spaces allowed): a setext heading
+# underline or a thematic break.
+_RULE_LINE = re.compile(r"^( {0,3})([=\-*_])[ =\-*_]*$")
+
+
+def _escape_line(line: str) -> str:
+    """One backslash before the marker character; the rendered text is unchanged."""
+    match = _BLOCK_START.match(line) or _RULE_LINE.match(line)
+    if match is None:
+        return line
+    indent = match.group(1)
+    return f"{indent}\\{line[len(indent):]}"
+
+
 def escape_llm_text(value: str) -> str:
-    """Normalize model prose without allowing it to create Markdown headings."""
-    text = value.replace("\r\n", "\n").replace("\r", "\n")
-    return "\n".join((f"\\{line}" if line.startswith("#") else line).rstrip() for line in text.split("\n")).strip()
+    """Normalize model prose so it can never create headings, fences, or other document structure."""
+    # Strip before escaping: stripping afterwards could pull an indented line to the margin.
+    text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return "\n".join(_escape_line(line.rstrip()) for line in text.split("\n"))
 
 
 def utc_iso(value: datetime) -> str:
@@ -89,7 +110,7 @@ def _file_result(run: RunResult, path: str) -> object | None:
 def _module_edges(project: ProjectModel, module: Module) -> list[str]:
     members = set(module.files)
     return sorted(
-        f"{source} → {destination}"
+        f"`{source}` → `{destination}`"
         for source, destination in project.graph.edges
         if source in members or destination in members
     )
@@ -127,9 +148,33 @@ def module_section(project: ProjectModel, run: RunResult, module: Module, *, hea
     h3 = "#" * (3 + heading_offset)
     h4 = "#" * (4 + heading_offset)
     result = _module_result(run, module)
-    parts = [f"{h3} `{_module_name(module.path)}`", "", f"{h4} Responsibility", "", _result_text(result, "responsibility")]
-    if not minimal:
-        parts.extend(["", f"{h4} How the pieces cooperate", "", _result_text(result, "how_pieces_cooperate"), "", f"{h4} Files in this module", "", _bullets(module.files), "", f"{h4} Internal dependencies", "", "\n".join(f"- `{edge}`" for edge in _module_edges(project, module)) or "- None", "", f"{h4} External dependencies", "", _bullets(_module_external(project, module))])
+    if minimal:
+        # Level 2: the module heading followed only by its Responsibility paragraph.
+        return "\n".join([f"{h3} `{_module_name(module.path)}`", "", _result_text(result, "responsibility")])
+    edges = "\n".join(f"- {edge}" for edge in _module_edges(project, module)) or "- None"
+    parts = [
+        f"{h3} `{_module_name(module.path)}`",
+        "",
+        f"{h4} Responsibility",
+        "",
+        _result_text(result, "responsibility"),
+        "",
+        f"{h4} How the pieces cooperate",
+        "",
+        _result_text(result, "how_pieces_cooperate"),
+        "",
+        f"{h4} Files in this module",
+        "",
+        _bullets(module.files),
+        "",
+        f"{h4} Internal dependencies",
+        "",
+        edges,
+        "",
+        f"{h4} External dependencies",
+        "",
+        _bullets(_module_external(project, module)),
+    ]
     return "\n".join(parts)
 
 

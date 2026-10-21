@@ -14,11 +14,11 @@ to the project root. Sections: Overview, Modules, Files.
 
 ## Overview
 
-Fake overview 1d736076d5b4.
+A small command-line example that solves the N-Queens puzzle by backtracking.
 
 ### Architecture
 
-Fake architecture 1d736076d5b4.
+main.py calls solve in solver.py, which places queens using the checks in utils.py.
 
 ### Entry Point
 
@@ -28,12 +28,10 @@ Fake architecture 1d736076d5b4.
 
 ### `(project root)`
 
-#### Responsibility
-
-Fake responsibility c313718d2960.
+Contains the whole N-Queens example. Everything lives in the project root.
 
 ## Files
 
-- `main.py` — Fake purpose 23683e003c1b.
-- `solver.py` — Fake purpose e9f883ed8700.
-- `utils.py` — Fake purpose 093f09873238.
+- `main.py` — Runs the example: it asks the solver for a placement on a small board and prints it.
+- `solver.py` — Holds the backtracking search that main.py calls to place the queens.
+- `utils.py` — Provides the board helpers the solver and main.py share.
