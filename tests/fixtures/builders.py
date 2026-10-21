@@ -82,3 +82,76 @@ def build_broken_files(tmp_path: Path, max_file_bytes: int = 64) -> Path:
             stacklevel=2,
         )
     return root
+
+
+# Names in build_oversized_file, for assertions.
+OVERSIZED_FILE = "inventory/report.py"
+OVERSIZED_MEDIUM_FUNCTIONS = [f"summarize_region_{n}" for n in range(1, 9)]
+OVERSIZED_CLASS = "WarehouseLedger"
+OVERSIZED_CLASS_METHODS = ["record_receipt", "record_shipment", "reconcile", "export_rows"]
+OVERSIZED_FUNCTION = "build_quarterly_report"
+
+
+def _metric_lines(target_tokens: int, indent: str, source: str) -> list[str]:
+    """Body lines (about 3 characters per estimated token) totalling roughly `target_tokens`."""
+    lines: list[str] = []
+    size = 0
+    step = 0
+    while size < target_tokens * 3:
+        step += 1
+        line = f'{indent}totals["metric_{step}"] += {source}.get("field_{step}", 0) * {step}\n'
+        lines.append(line)
+        size += len(line)
+    return lines
+
+
+def build_oversized_file(tmp_path: Path, *, chunk_tokens: int) -> Path:
+    """One Python file sized against `chunk_tokens` (a chunk's source budget in estimated tokens).
+
+    - eight medium functions of about chunk_tokens / 4 each (several fit per chunk);
+    - a class of about 2 * chunk_tokens: a header plus four methods of about
+      chunk_tokens / 2 each, so it only fits when split at method boundaries;
+    - one function of about 3 * chunk_tokens, larger than any chunk, so it is truncated;
+    - ordinary imports at the top, and `main.py` importing the file.
+    """
+    parts = [
+        '"""Inventory reporting: per-region totals, a warehouse ledger, and the quarterly report."""\n',
+        "from collections import defaultdict\n",
+        "import math\n",
+        "\n",
+    ]
+    for number, name in enumerate(OVERSIZED_MEDIUM_FUNCTIONS, start=1):
+        parts.append(f"\ndef {name}(records: list[dict]) -> dict:\n")
+        parts.append(f'    """Totals for region {number}: quantities and revenue per metric."""\n')
+        parts.append("    totals: dict[str, float] = defaultdict(float)\n")
+        parts.append("    for record in records:\n")
+        parts.extend(_metric_lines(chunk_tokens // 4, "        ", "record"))
+        parts.append("    return dict(totals)\n\n")
+    parts.append(f"\nclass {OVERSIZED_CLASS}:\n")
+    parts.append('    """Running stock levels for one warehouse, updated as goods arrive and leave."""\n\n')
+    parts.append("    currency = \"EUR\"\n")
+    for method in OVERSIZED_CLASS_METHODS:
+        parts.append(f"\n    def {method}(self, entry: dict) -> dict:\n")
+        parts.append(f'        """Apply one {method.replace("_", " ")} to the ledger."""\n')
+        parts.append("        totals: dict[str, float] = defaultdict(float)\n")
+        parts.extend(_metric_lines(chunk_tokens // 2, "        ", "entry"))
+        parts.append("        return dict(totals)\n")
+    parts.append(f"\n\ndef {OVERSIZED_FUNCTION}(ledger: {OVERSIZED_CLASS}, records: list[dict]) -> dict:\n")
+    parts.append('    """Combine every region and the ledger into one quarterly report."""\n')
+    parts.append("    totals: dict[str, float] = defaultdict(float)\n")
+    parts.append("    for record in records:\n")
+    parts.extend(_metric_lines(chunk_tokens * 3, "        ", "record"))
+    parts.append("    totals[\"scale\"] = math.log10(max(len(records), 1))\n")
+    parts.append("    return dict(totals)\n")
+    root = tmp_path / "oversized_file"
+    return make_project(
+        root,
+        {
+            OVERSIZED_FILE: "".join(parts),
+            "inventory/__init__.py": "",
+            "main.py": (
+                "from inventory.report import WarehouseLedger, build_quarterly_report\n\n\n"
+                "def main() -> None:\n    print(build_quarterly_report(WarehouseLedger(), []))\n"
+            ),
+        },
+    )

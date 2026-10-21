@@ -624,6 +624,13 @@ this into a chat later) and to write plain prose with no headings.
 - **Invariant:** every prompt any pass sends has
   `estimate_tokens(prompt) <= prompt_budget`. Passes enforce this by the
   fallback ladders below, never by hoping.
+- The invariant covers retry prompts too. Passes assemble prompts against the
+  **pass budget** = `prompt_budget` minus room for the retry suffix (whose error
+  text is capped at 500 characters), so appending the suffix can never overflow.
+  A prompt that still does not fit is never sent.
+- When even the smallest form of a prompt cannot fit (a tiny `context_tokens`),
+  that file/module/project fails with "context too small …; raise
+  llm.context_tokens" and no call is made.
 
 ### `file_pass`
 
@@ -655,7 +662,10 @@ When a file's prompt exceeds the budget, split along `top_level_units`
 4. Each chunk is summarized independently, then exactly **one** combine call
    merges chunk summaries into the file-level schema. If the combine prompt
    would exceed the budget, each chunk summary is cut to its first sentence
-   first.
+   first; if it still does not fit, the file fails with "context too small".
+   The combine prompt carries the file's top-level names, not the full
+   structure listing. A chunk prompt needs at least 500 estimated tokens of
+   room for source, or the file fails with "context too small".
 5. Chunk calls are not individually cached; the cache stores the final file
    result under the file's `input_key`.
 
@@ -668,7 +678,10 @@ stop at the first step that fits:
 1. Full text (all Purposes / all Responsibilities).
 2. First sentence of each.
 3. Include as many items as fit ordered by in-degree (desc, ties by path) and
-   append `N more files/modules omitted from this prompt`.
+   append `N more files/modules omitted from this prompt`. Items keep their
+   first-sentence text. If the prompt does not fit even with no items, the edge
+   list is cut line by line (sorted order) with an `… and N more edges` line.
+   If that still does not fit, the item fails with "context too small".
 
 The same text is what enters the cache key, so the ladder is part of
 determinism.
@@ -676,7 +689,8 @@ determinism.
 `module_pass`: member Purposes + relevant edges + external dependency names →
 `responsibility`, `how_pieces_cooperate`.
 `project_pass`: module Responsibilities + deterministic entry point + project
-edge list (module-to-module summary of it) + capped other-file paths →
+edge list (module-to-module summary of it: `pkg/a -> pkg/b` lines between
+different modules, deduplicated, sorted) + other-file paths capped at 50 →
 `overview`, `architecture`. It must not infer an entry point when detection
 returned `None`.
 
