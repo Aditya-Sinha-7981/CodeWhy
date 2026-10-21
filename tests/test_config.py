@@ -35,13 +35,22 @@ def test_defaults_match_architecture(tmp_path: Path) -> None:
     assert llm.effective_model == "qwen2.5-coder:14b"
     assert llm.host == "http://localhost:11434"
     assert llm.effective_context_tokens == 16384
-    assert llm.max_output_tokens == 1024
+    assert llm.effective_max_output_tokens == 1024
     assert llm.temperature == 0
     assert llm.seed == 0
     assert llm.timeout_seconds == 300
     assert llm.max_transient_retries == 3
     assert llm.acknowledge_remote is False
-    for unset in ("model", "base_url", "api_key_env", "context_tokens", "structured_output", "send_seed", "reasoning_effort"):
+    for unset in (
+        "model",
+        "base_url",
+        "api_key_env",
+        "context_tokens",
+        "max_output_tokens",
+        "structured_output",
+        "send_seed",
+        "reasoning_effort",
+    ):
         assert getattr(llm, unset) is None, unset
     assert config.output.mode == "single-file"
     assert config.output.dir == "codewhy-docs"
@@ -62,8 +71,8 @@ def test_effective_context_tokens_per_provider(tmp_path: Path, provider: str, ex
 
 
 def test_explicit_context_tokens_wins(tmp_path: Path) -> None:
-    write_toml(tmp_path, '[llm]\nprovider = "gemini"\ncontext_tokens = 8000\n')
-    assert resolve_config(tmp_path).llm.effective_context_tokens == 8000
+    write_toml(tmp_path, '[llm]\nprovider = "gemini"\ncontext_tokens = 20000\n')
+    assert resolve_config(tmp_path).llm.effective_context_tokens == 20000
 
 
 @pytest.mark.parametrize(("provider", "expected"), [("ollama", "qwen2.5-coder:14b"), ("gemini", None), ("openai-compat", None)])
@@ -258,7 +267,7 @@ def test_overrides_layer_over_file_over_defaults(tmp_path: Path) -> None:
     assert config.llm.provider == "openai-compat"  # file beats default
     assert config.llm.model == "from-cli"  # override beats file
     assert config.llm.seed == 9
-    assert config.llm.max_output_tokens == 1024  # default survives
+    assert config.llm.effective_max_output_tokens == 1024  # default survives
 
 
 def test_none_overrides_mean_not_provided(tmp_path: Path) -> None:

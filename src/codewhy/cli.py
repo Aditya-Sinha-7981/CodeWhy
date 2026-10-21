@@ -14,6 +14,8 @@ from codewhy import __version__
 from codewhy.config import CONFIG_FILE_NAME, Config, ConfigError, render_toml, resolve_config
 from codewhy.ignore import TOOLIGNORE_FILE_NAME, DiscoveryError
 from codewhy.graph.builder import imported_by, imports_of, most_depended_on
+from codewhy.llm.budget import prompt_budget
+from codewhy.llm.provider import ProviderError, build_provider
 from codewhy.project import build_project
 
 app = typer.Typer(
@@ -33,6 +35,8 @@ INIT_TEMPLATES: tuple[tuple[str, str], ...] = (
 )
 
 PathArg = Annotated[Path, typer.Argument(help="Project folder.", show_default=True)]
+ProviderOpt = Annotated[str | None, typer.Option(help="Override llm.provider (ollama, openai-compat, gemini).")]
+ModelOpt = Annotated[str | None, typer.Option(help="Override llm.model.")]
 
 
 def fail(message: str) -> NoReturn:
@@ -94,12 +98,8 @@ def init(path: PathArg = Path(".")) -> None:
 
 
 @config_app.command("show")
-def config_show(
-    path: PathArg = Path("."),
-    provider: Annotated[str | None, typer.Option(help="Override llm.provider.")] = None,
-    model: Annotated[str | None, typer.Option(help="Override llm.model.")] = None,
-) -> None:
-    """Print the resolved configuration (defaults + codewhy.toml + options)."""
+def config_show(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
+    """Print the resolved configuration (defaults + codewhy.toml + options, presets applied)."""
     root = require_dir(path)
     config = load_or_fail(root, {"llm.provider": provider, "llm.model": model})
     source = str(config.source_path) if config.source_path else "defaults (no codewhy.toml found)"
@@ -107,15 +107,44 @@ def config_show(
     typer.echo(f"# source: {source}")
     typer.echo(f"# effective model: {config.llm.effective_model or 'not set (required for this provider)'}")
     typer.echo(f"# effective context_tokens: {config.llm.effective_context_tokens}")
+    typer.echo(f"# effective max_output_tokens: {config.llm.effective_max_output_tokens}")
     typer.echo("")
     typer.echo(render_toml(config), nl=False)
 
 
 @app.command()
-def scan(path: PathArg = Path(".")) -> None:
+def doctor(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
+    """Check that the configured model is reachable (preflight only; no source code is sent)."""
+    root = require_dir(path)
+    config = load_or_fail(root, {"llm.provider": provider, "llm.model": model})
+    llm = config.llm
+    try:
+        target = build_provider(config)
+    except ConfigError as exc:
+        fail(str(exc))
+    try:
+        target.preflight()
+    except ProviderError as exc:
+        fail(str(exc))
+    finally:
+        close = getattr(target, "close", None)
+        if close is not None:
+            close()
+    budget = prompt_budget(llm.effective_context_tokens, llm.effective_max_output_tokens)
+    typer.echo(f"provider: {llm.provider}")
+    typer.echo(f"model: {llm.effective_model}")
+    typer.echo(f"endpoint: {target.endpoint_label} ({'remote' if target.is_remote else 'local'})")
+    typer.echo(f"context_tokens: {llm.effective_context_tokens}")
+    typer.echo(f"max_output_tokens: {llm.effective_max_output_tokens}")
+    typer.echo(f"prompt budget: ~{budget} tokens (estimated)")
+    typer.echo("ok: preflight passed")
+
+
+@app.command()
+def scan(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
     """Document the project in PATH. (Stub: reports discovery and graph results only.)"""
     root = require_dir(path)
-    config = load_or_fail(root)
+    config = load_or_fail(root, {"llm.provider": provider, "llm.model": model})
     try:
         project = build_project(root, config)
     except (ConfigError, DiscoveryError) as exc:

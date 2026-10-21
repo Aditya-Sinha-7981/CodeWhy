@@ -206,7 +206,7 @@ provider = "ollama"              # "ollama" | "openai-compat" | "gemini"
 model = "qwen2.5-coder:14b"
 host = "http://localhost:11434"  # ollama only
 context_tokens = 16384           # see below
-max_output_tokens = 1024
+max_output_tokens = 1024         # provider default: 1024 (ollama, openai-compat), 8192 (gemini)
 temperature = 0
 seed = 0
 timeout_seconds = 300
@@ -216,7 +216,7 @@ max_transient_retries = 3        # network errors, 429, 5xx (exponential backoff
 # provider = "gemini"
 # model = "<model id>"              # required, no default shipped
 # (fills in: base_url, api_key_env = "GEMINI_API_KEY", structured_output = "schema",
-#  reasoning_effort = "low", send_seed = false, context_tokens = 32768)
+#  reasoning_effort = "low", send_seed = false, context_tokens = 32768, max_output_tokens = 8192)
 
 # --- generic openai-compat example (no default model is shipped; set one) ---
 # provider = "openai-compat"
@@ -247,10 +247,22 @@ max_file_bytes = 500000          # larger supported files are skipped with a war
 **`gemini` preset:** base URL `https://generativelanguage.googleapis.com/v1beta/openai/`,
 `api_key_env` defaults to `GEMINI_API_KEY`, `structured_output = "schema"`,
 `reasoning_effort = "low"`, `send_seed = false`, default `context_tokens`
-32768. The user may override any of these; `model` is always required.
-Thinking-capable models can spend output tokens on reasoning, so task 04
-verifies live how reasoning interacts with `max_output_tokens` and records the
-result.
+32768, default `max_output_tokens` 8192. The user may override any of these;
+`model` is always required. The larger output cap exists because Gemini counts
+thinking tokens against it ("maximum number of tokens a response can generate,
+including thought tokens", Gemini thinking docs, 2026-10-14) and
+`reasoning_effort = "low"` alone can use a 1024-token thinking budget; with a
+1024 cap the JSON could be cut off or empty. The live smoke check (task 04 log)
+confirms or adjusts the value.
+
+`max_output_tokens` when unset: 1024 for `ollama` and `openai-compat`, 8192 for
+`gemini`. It must be smaller than the effective `context_tokens` (config error
+otherwise).
+
+`openai-compat` without the preset: `structured_output` unset means `prompt`
+(no `response_format`), `send_seed` unset means `false`, and `api_key_env` unset
+means no `Authorization` header (for local servers such as LM Studio). `base_url`
+and `model` are required.
 
 `context_tokens`: for `ollama` it is sent as `options.num_ctx` on **every**
 request (never rely on Ollama's default); for `openai-compat` it is not sent
@@ -567,21 +579,30 @@ class Provider(Protocol):
 - `openai_compat_provider.py`: `httpx`, bearer key read from the env var named
   by `api_key_env` at call time (never logged, never written to disk or cache).
   Sends `temperature` and `max_tokens` always; `seed` only if `send_seed`;
-  `reasoning_effort` only if set. `structured_output`: `schema` sends
+  `reasoning_effort` only if set (`max_tokens` is `max_output_tokens`).
+  `structured_output`: `schema` sends
   `response_format` json_schema; `json` sends `response_format` json_object;
   `prompt` sends neither and relies on the prompt plus tolerant JSON extraction.
   Provider-facing JSON schemas are simplified (no `$defs`, no `anyOf`; optional
   fields typed as plain strings) because hosted endpoints accept only a subset.
+- **Preflight (`ollama`):** `GET /api/version` must report Ollama **0.5.0** or
+  newer (JSON-schema `format`); `GET /api/tags` must list the model (a bare name
+  means `<name>:latest`). Connection failure → "Cannot reach Ollama at <host>.
+  Start it with `ollama serve` …"; model missing → `ollama pull <model>`.
 - **Preflight (`openai-compat`/`gemini`):** the key env var must be set; then
   `GET {base_url}/models`: 401/403 → fatal auth message; 404/405/501 → skip the
   check (endpoint has no listing); connection/timeout error → fatal
   unreachable message; a listing that lacks the model id → warning only (ids may
-  be prefixed).
+  be prefixed); 429/5xx on the listing → warning only. Gemini reports an invalid
+  key as HTTP 400 "Please pass a valid API key" (observed 2026-10-20), so a 4xx
+  whose body says the key is invalid is also an auth failure.
 - **Error mapping:** 401/403 → `AuthError` (never retried); 429, 5xx, timeouts,
   connection errors → transient (backoff inside the provider); other 4xx →
   `BadRequestError` with a key-redacted body excerpt; unparseable JSON content
   → `MalformedOutput`. Schema validation and the retry-once-with-error policy
-  live in the pass layer, not the provider.
+  live in the pass layer, not the provider. Transient backoff: 1s, 2s, 4s, …
+  capped at 30s; a `Retry-After` header (capped at 60s) is used when it is
+  longer.
 
 ### Prompt rules
 
