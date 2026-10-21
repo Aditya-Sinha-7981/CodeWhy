@@ -521,8 +521,13 @@ delegated to the LLM when they can be rendered from Layer 1 or Layer 2; the
 LLM answers "why" and "how they fit together", not "what are the function
 names".
 
-Renderer rule: LLM strings are inserted as plain paragraphs; line-leading `#`
-characters are escaped so model output can never break document structure.
+Renderer rule: LLM strings are inserted as plain paragraphs and model output
+can never break document structure. The text is trimmed, `\r\n` normalized,
+trailing spaces removed, and one backslash is put before the first character of
+any line (after up to 3 spaces) that would open a block outliving the
+paragraph: `#` (heading), ``` ``` ``` or `~~~` (code fence), `<` (HTML block,
+e.g. an unclosed `<!--`), and lines made only of `=`, `-`, `*` or `_` (setext
+underline or thematic break). The rendered text is otherwise unchanged.
 
 **Pass schemas** (pydantic models in `summarize/schemas.py`):
 

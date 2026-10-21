@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from concurrent.futures import ThreadPoolExecutor
 
 from codewhy.config import Config
 from codewhy.graph.builder import canonical_edges, external_dependencies, imported_by, imports_of, module_in_degree
@@ -32,28 +31,6 @@ PROJECT_SUBJECT = ""
 # on_item(pass_name, subject, status); status is "generated" or "failed" (task 07 adds "cached").
 OnItem = Callable[[str, str, str], None]
 OnStage = Callable[[str, str], None]
-DEFAULT_PROVIDER_WORKERS = 2
-
-
-def _provider_workers(provider: Provider) -> int:
-    """Use bounded concurrency only for providers that explicitly opt in."""
-    return DEFAULT_PROVIDER_WORKERS if getattr(provider, "supports_concurrency", False) else 1
-
-
-def _run_independent(jobs: list[tuple[str, Callable[[], PassResult]]], provider: Provider) -> dict[str, PassResult]:
-    """Run independent jobs with bounded workers and return results in job order.
-
-    Results are collected in the original sorted order, so provider completion
-    order never affects progress output, dictionaries, summaries, or rendering.
-    Exceptions retain the existing pipeline behavior when the corresponding
-    future is observed.
-    """
-    workers = _provider_workers(provider)
-    if workers == 1 or len(jobs) < 2:
-        return {subject: fn() for subject, fn in jobs}
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="codewhy-pass") as executor:
-        futures = [(subject, executor.submit(fn)) for subject, fn in jobs]
-        return {subject: future.result() for subject, future in futures}
 
 
 @dataclass
@@ -90,7 +67,9 @@ def run_pipeline(
         return result
 
     files: dict[str, PassResult] = {}
-    file_jobs: list[tuple[str, Callable[[], PassResult]]] = []
+    file_subjects = [path for path in sorted(project.structures) if project.structures[path].status == "ok"]
+    if on_stage is not None:
+        on_stage("file generation", f"started: {len(file_subjects)} items")
     for path in sorted(project.structures):
         fs = project.structures[path]
         if fs.status != "ok":
@@ -114,13 +93,9 @@ def run_pipeline(
             clock=clock,
             on_request=request_callback,
         )
-        file_jobs.append((path, partial(run_pass, "file", path, inputs, fn)))
+        files[path] = record("file", path, run_pass("file", path, inputs, fn))
     if on_stage is not None:
-        on_stage("file generation", f"started: {len(file_jobs)} items")
-    for path, result in _run_independent(file_jobs, provider).items():
-        files[path] = record("file", path, result)
-    if on_stage is not None:
-        on_stage("file generation", f"complete: {len(file_jobs)} items")
+        on_stage("file generation", f"complete: {len(file_subjects)} items")
 
     purposes = {
         path: result.data.purpose
@@ -128,8 +103,10 @@ def run_pipeline(
         if isinstance(result.data, FilePass)
     }
     modules: dict[str, PassResult] = {}
-    module_jobs: list[tuple[str, Callable[[], PassResult]]] = []
-    for module in sorted(project.modules, key=lambda m: (m.path != ROOT_MODULE, m.path)):
+    ordered_modules = sorted(project.modules, key=lambda m: (m.path != ROOT_MODULE, m.path))
+    if on_stage is not None:
+        on_stage("module generation", f"started: {len(ordered_modules)} items")
+    for module in ordered_modules:
         members = frozenset(module.files)
         assembled = assemble_module_prompt(
             module,
@@ -153,13 +130,9 @@ def run_pipeline(
             clock=clock,
             on_request=request_callback,
         )
-        module_jobs.append((module.path, partial(run_pass, "module", module.path, assembled.inputs, fn)))
+        modules[module.path] = record("module", module.path, run_pass("module", module.path, assembled.inputs, fn))
     if on_stage is not None:
-        on_stage("module generation", f"started: {len(module_jobs)} items")
-    for path, result in _run_independent(module_jobs, provider).items():
-        modules[path] = record("module", path, result)
-    if on_stage is not None:
-        on_stage("module generation", f"complete: {len(module_jobs)} items")
+        on_stage("module generation", f"complete: {len(ordered_modules)} items")
 
     responsibilities = {
         path: result.data.responsibility if isinstance(result.data, ModulePass) else UNAVAILABLE

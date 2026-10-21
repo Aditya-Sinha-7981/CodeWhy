@@ -45,10 +45,6 @@ def _label(base_url: str) -> str:
 
 
 class OpenAICompatProvider:
-    # httpx.Client supports concurrent requests; request bodies and retry state
-    # are local to each call. The pipeline uses this opt-in with two workers.
-    supports_concurrency = True
-
     def __init__(self, llm: LLMConfig, *, client: httpx.Client, sleep: Sleep) -> None:
         self.provider_name = llm.provider
         self.base_url = (llm.base_url or "").rstrip("/")
@@ -189,13 +185,13 @@ class OpenAICompatProvider:
             response = self.client.get(
                 f"{self.base_url}/models",
                 headers=self._headers(key),
-                timeout=PREFLIGHT_TIMEOUT_SECONDS,
+                timeout=min(self.timeout, PREFLIGHT_TIMEOUT_SECONDS),
             )
         except httpx.UnsupportedProtocol:
             raise ProviderError(f"llm.base_url {self.base_url!r} is not a valid URL; it must start with https://") from None
         except httpx.TimeoutException:
             raise ProviderError(
-                f"Timed out contacting {self.endpoint_label} after {PREFLIGHT_TIMEOUT_SECONDS:g} seconds. "
+                f"Timed out contacting {self.endpoint_label} after {min(self.timeout, PREFLIGHT_TIMEOUT_SECONDS):g} seconds. "
                 f"Check {self.base_url} and the provider status."
             ) from None
         except httpx.TransportError:

@@ -28,7 +28,9 @@ RAW_EXCERPT_CHARS = 2000
 BODY_EXCERPT_CHARS = 300
 BACKOFF_CAP_SECONDS = 30.0
 RETRY_AFTER_CAP_SECONDS = 60.0
+# Preflight should fail fast; the configured timeout_seconds is for generation.
 PREFLIGHT_TIMEOUT_SECONDS = 10.0
+
 Sleep = Callable[[float], None]
 
 

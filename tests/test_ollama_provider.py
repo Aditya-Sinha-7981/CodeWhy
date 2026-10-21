@@ -210,11 +210,6 @@ def test_preflight_timeout_error_names_fixed_duration() -> None:
     assert timeout_extensions == [{"connect": 10.0, "read": 10.0, "write": 10.0, "pool": 10.0}]
 
 
-def test_ollama_does_not_opt_into_parallel_generation() -> None:
-    provider, _ = make(healthy())
-    assert provider.supports_concurrency is False
-
-
 def test_preflight_missing_model_says_ollama_pull() -> None:
     provider, _ = make(healthy(models=("llama3:8b",)), model="qwen2.5-coder:7b")
     with pytest.raises(ProviderError) as info:

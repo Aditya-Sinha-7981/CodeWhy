@@ -8,11 +8,11 @@ generated_at: 2026-01-01T12:00:00Z
 
 ## Overview
 
-Fake overview 1d736076d5b4.
+A small command-line example that solves the N-Queens puzzle by backtracking.
 
 ### Architecture
 
-Fake architecture 1d736076d5b4.
+main.py calls solve in solver.py, which places queens using the checks in utils.py.
 
 ### Entry Point
 
@@ -20,7 +20,7 @@ Fake architecture 1d736076d5b4.
 
 ### Modules
 
-- `(project root)` — Fake responsibility c313718d2960.
+- `(project root)` — Contains the whole N-Queens example.
 
 ### Most depended-on files
 

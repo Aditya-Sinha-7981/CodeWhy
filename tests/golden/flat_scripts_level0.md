@@ -14,11 +14,11 @@ to the project root. Sections: Overview, Modules, Files.
 
 ## Overview
 
-Fake overview 1d736076d5b4.
+A small command-line example that solves the N-Queens puzzle by backtracking.
 
 ### Architecture
 
-Fake architecture 1d736076d5b4.
+main.py calls solve in solver.py, which places queens using the checks in utils.py.
 
 ### Entry Point
 
@@ -26,7 +26,7 @@ Fake architecture 1d736076d5b4.
 
 ### Modules
 
-- `(project root)` — Fake responsibility c313718d2960.
+- `(project root)` — Contains the whole N-Queens example.
 
 ### Most depended-on files
 
@@ -39,11 +39,11 @@ Fake architecture 1d736076d5b4.
 
 #### Responsibility
 
-Fake responsibility c313718d2960.
+Contains the whole N-Queens example. Everything lives in the project root.
 
 #### How the pieces cooperate
 
-Fake how_pieces_cooperate c313718d2960.
+main.py drives solver.py, and both rely on the helpers in utils.py.
 
 #### Files in this module
 
@@ -53,9 +53,9 @@ Fake how_pieces_cooperate c313718d2960.
 
 #### Internal dependencies
 
-- `main.py → solver.py`
-- `main.py → utils.py`
-- `solver.py → utils.py`
+- `main.py` → `solver.py`
+- `main.py` → `utils.py`
+- `solver.py` → `utils.py`
 
 #### External dependencies
 
@@ -67,7 +67,7 @@ Fake how_pieces_cooperate c313718d2960.
 
 #### Purpose
 
-Fake purpose 23683e003c1b.
+Runs the example: it asks the solver for a placement on a small board and prints it.
 
 #### Depends On
 
@@ -86,7 +86,7 @@ Fake purpose 23683e003c1b.
 
 #### Purpose
 
-Fake purpose e9f883ed8700.
+Holds the backtracking search that main.py calls to place the queens.
 
 #### Depends On
 
@@ -102,11 +102,15 @@ Fake purpose e9f883ed8700.
   - `def __init__(self, size: int) -> None`
 - `def solve(size: int) -> list[int]`
 
+#### Notes
+
+solve imports is_safe lazily, so it returns an empty board if utils lacks it.
+
 ### `utils.py`
 
 #### Purpose
 
-Fake purpose 093f09873238.
+Provides the board helpers the solver and main.py share. It keeps the search code small.
 
 #### Depends On
 
