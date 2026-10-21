@@ -32,6 +32,26 @@ DEFAULT_CONTEXT_TOKENS: dict[str, int] = {
     "openai-compat": 32768,
     "gemini": 32768,
 }
+# Gemini counts thinking tokens against the output cap (docs, 2026-10-14), and
+# reasoning_effort "low" alone can use 1024 of them, so its default is larger.
+DEFAULT_MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "ollama": 1024,
+    "openai-compat": 1024,
+    "gemini": 8192,
+}
+
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+# Values the gemini preset fills in when the user left the key unset. `model`
+# is deliberately absent: hosted model ids go stale, so none is shipped.
+GEMINI_PRESET: dict[str, object] = {
+    "base_url": GEMINI_BASE_URL,
+    "api_key_env": "GEMINI_API_KEY",
+    "structured_output": "schema",
+    "reasoning_effort": "low",
+    "send_seed": False,
+    "context_tokens": DEFAULT_CONTEXT_TOKENS["gemini"],
+    "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS["gemini"],
+}
 
 
 class ConfigError(Exception):
@@ -79,7 +99,8 @@ class LLMConfig(_Section):
     api_key_env: str | None = None
     # None means "use the provider-specific default" (see effective_context_tokens).
     context_tokens: int | None = Field(default=None, gt=0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    # None means "use the provider-specific default" (see effective_max_output_tokens).
+    max_output_tokens: int | None = Field(default=None, gt=0)
     temperature: float = Field(default=0.0, ge=0, le=2)
     seed: int = 0
     timeout_seconds: int = Field(default=300, gt=0)
@@ -98,10 +119,26 @@ class LLMConfig(_Section):
         return DEFAULT_CONTEXT_TOKENS[self.provider]
 
     @property
+    def effective_max_output_tokens(self) -> int:
+        if self.max_output_tokens is not None:
+            return self.max_output_tokens
+        return DEFAULT_MAX_OUTPUT_TOKENS[self.provider]
+
+    @property
     def effective_model(self) -> str | None:
         if self.model is not None:
             return self.model
         return DEFAULT_OLLAMA_MODEL if self.provider == "ollama" else None
+
+    @model_validator(mode="after")
+    def _output_fits_context(self) -> LLMConfig:
+        output, context = self.effective_max_output_tokens, self.effective_context_tokens
+        if output >= context:
+            raise ValueError(
+                f"max_output_tokens ({output}) must be smaller than context_tokens ({context}); "
+                "the prompt needs the rest of the context window"
+            )
+        return self
 
 
 class OutputConfig(_Section):
@@ -262,9 +299,19 @@ def resolve_config(root: Path, overrides: dict[str, object] | None = None) -> Co
     merged = _apply_overrides(raw.data, overrides or {})
     # The file alone already validated, so anything failing now involves an override.
     source = "command-line options" if raw.source_path is None else f"{raw.source_path} + command-line options"
-    config = _validate(merged, source=source)
+    config = apply_preset(_validate(merged, source=source))
     config._source_path = raw.source_path
     return config
+
+
+def apply_preset(config: Config) -> Config:
+    """Fill the gemini preset into every llm key the user left unset; explicit values win."""
+    if config.llm.provider != "gemini":
+        return config
+    filled = {key: value for key, value in GEMINI_PRESET.items() if getattr(config.llm, key) is None}
+    if not filled:
+        return config
+    return config.model_copy(update={"llm": config.llm.model_copy(update=filled)})
 
 
 def _toml_value(value: object) -> str:

@@ -6,7 +6,7 @@ provider = "ollama"              # "ollama" | "openai-compat" | "gemini"
 # model = "qwen2.5-coder:14b"    # default for ollama only; hosted providers require a model
 host = "http://localhost:11434"  # ollama only
 # context_tokens = 16384         # default: 16384 for ollama, 32768 for openai-compat/gemini
-max_output_tokens = 1024
+# max_output_tokens = 1024       # default: 1024 for ollama/openai-compat, 8192 for gemini (thinking counts)
 temperature = 0
 seed = 0
 timeout_seconds = 300
@@ -16,7 +16,7 @@ max_transient_retries = 3        # network errors, 429, 5xx (exponential backoff
 # provider = "gemini"
 # model = "<model id>"              # required, no default shipped
 # (fills in: base_url, api_key_env = "GEMINI_API_KEY", structured_output = "schema",
-#  reasoning_effort = "low", send_seed = false, context_tokens = 32768)
+#  reasoning_effort = "low", send_seed = false, context_tokens = 32768, max_output_tokens = 8192)
 
 # --- generic openai-compat example (no default model is shipped; set one) ---
 # provider = "openai-compat"
