@@ -143,3 +143,38 @@ Defects found:
   only names Notes and Most depended-on as omittable). Harmless; left as is.
 - Empty lists render as `- None` (a bullet). The spec's "(or: None)" is
   ambiguous; left as the author wrote it.
+
+## 2026-10-22 — remaining checks after the merge
+
+`main` (`7bb53ee`) merged this review with the live checks still open. They
+continue on `review/06-07-render-cache` together with the CW-07 review
+(`logs/review-07-cache.md`). The code was re-read against task §6–§8. No new
+code defects were found beyond the earlier review, which the merge includes.
+
+Plan:
+
+1. Let the live E2E pick a model through an opt-in `CODEWHY_LIVE_MODEL`
+   environment variable. The test was hardwired to the default
+   `qwen2.5-coder:14b`, which is not pulled on this machine. Add the
+   TESTS.md E2E re-run check: zero generated and byte-identical output.
+2. Run the live E2E on `flat_scripts` with local Ollama `qwen2.5-coder:7b`.
+3. Scan two real projects (copies in the scratchpad; nothing written into
+   the originals). Record counts, failures, level and token estimate.
+4. Paste test: give one `PROJECT_DOCS.md` cold to a fresh model and ask three
+   questions. Record whether the answers were right.
+
+### Results (2026-10-22)
+
+- `tests/test_e2e_live.py` now takes an optional `CODEWHY_LIVE_MODEL`
+  (passed as `--model`). After the first scan it re-runs and asserts 0
+  generated and byte-identical output.
+
+| Check | Result |
+|---|---|
+| Live E2E `CODEWHY_LIVE_MODEL=qwen2.5-coder:7b pytest -q -m live_llm tests/test_e2e_live.py` | **Passed** (1 passed, 21.7 s, local Ollama) |
+| `scan` on real projects | **One of two run** (lead's instruction: one project only, for time). Sudoku Solver: 9 files, 12 generated, 0 failed, 0 skipped, level 0, ≈ 3,574 tokens. The second project was **Not run**. |
+| Paste test | **Not run** (time; needs a person to judge the answers) |
+| Repeat-scan diff | With the CW-07 cache the re-run is byte-identical (above). |
+
+Task 06 remains short of its acceptance criteria on the second real project
+and the paste test.

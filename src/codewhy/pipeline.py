@@ -18,7 +18,7 @@ from functools import partial
 import logging
 
 from codewhy.config import Config
-from codewhy.cache.db import CacheDB, CacheIOError, CacheLocked
+from codewhy.cache.db import CacheDB, CacheError, CacheIOError
 from codewhy.cache.keys import FAILED_MEMBER, config_fingerprint, file_key, module_key, project_key
 from codewhy.graph.builder import canonical_edges, external_dependencies, imported_by, imports_of, module_in_degree
 from codewhy.llm.provider import Provider
@@ -65,17 +65,20 @@ def _cache_warning(exc: Exception) -> None:
     logger.warning("cache unavailable; continuing without cache: %s", exc)
 
 
-def run_pass(pass_name: str, subject: str, key: object, fn: Callable[[], PassResult]) -> PassResult:
-    """Run one pass through the private cache context when supplied."""
+def run_pass(pass_name: str, subject: str, inputs: object, fn: Callable[[], PassResult]) -> PassResult:
+    """The cache seam: a hit skips `fn`; a successful miss is stored before returning.
+
+    `inputs` are the pass's prompt inputs (task 05's seam); the cache key travels
+    in the private `_CacheCall`. Once the pipeline has opened the cache, a cache
+    error only disables caching for the rest of the run: the result is kept.
+    """
     if not isinstance(fn, _CacheCall):
         return fn()
     call = fn
     if call.enabled[0] and not call.full:
         try:
             cached = call.cache.lookup(pass_name, subject, call.key)
-        except CacheLocked:
-            raise
-        except CacheIOError as exc:
+        except CacheError as exc:
             call.enabled[0] = False
             _cache_warning(exc)
         else:
@@ -87,9 +90,7 @@ def run_pass(pass_name: str, subject: str, key: object, fn: Callable[[], PassRes
     if call.enabled[0] and result.failure is None:
         try:
             call.cache.store(pass_name, subject, call.key, result)
-        except CacheLocked:
-            raise
-        except CacheIOError as exc:
+        except CacheError as exc:
             call.enabled[0] = False
             _cache_warning(exc)
     return result
@@ -137,6 +138,14 @@ def _run_pipeline(
     use_cache: bool = True,
 ) -> RunResult:
     cache_enabled = [use_cache]
+    if use_cache:
+        # Open before the first provider call: a locked or unwritable cache is a
+        # fatal error (exit 1) that must not cost a paid request first.
+        try:
+            cache.ensure_open()
+        except CacheIOError as exc:
+            cache_enabled[0] = False
+            _cache_warning(exc)
     config_fp = config_fingerprint(
         {
             "provider": config.llm.provider,
@@ -275,6 +284,7 @@ def _run_pipeline(
         assembled.inputs.get("modules", []),
         canonical_edges(graph),
         assembled.inputs.get("other_files", []),
+        assembled.inputs.get("omitted", 0),
     )
     call = _CacheCall(cache, key, fn, full, cache_enabled)
     project_result = record("project", PROJECT_SUBJECT, run_pass("project", PROJECT_SUBJECT, assembled.inputs, call), call.status)
@@ -285,8 +295,6 @@ def _run_pipeline(
             cache.delete_missing("file", set(files))
             cache.delete_missing("module", set(modules))
             cache.delete_missing("project", {PROJECT_SUBJECT})
-        except CacheLocked:
-            raise
-        except CacheIOError as exc:
+        except CacheError as exc:
             _cache_warning(exc)
     return RunResult(files=files, modules=modules, project=project_result, counts=counts)

@@ -246,13 +246,12 @@ def scan(
         generated = run_result.counts["generated"]
         cached = run_result.counts["cached"]
         failed = run_result.counts["failed"]
-        cache_text = f", {cached} cached"
         if rendered is not None:
-            typer.echo(f"{len(project.files)} files, {generated} generated{cache_text}, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
+            typer.echo(f"{len(project.files)} files, {cached} cached, {generated} generated, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
             if rendered.over_budget:
                 typer.echo("warning: Level 2 output exceeds the configured token budget.", err=True)
         else:
-            typer.echo(f"{len(project.files)} files, {generated} generated{cache_text}, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
+            typer.echo(f"{len(project.files)} files, {cached} cached, {generated} generated, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
         if skipped or failed:
             raise typer.Exit(2)
     except KeyboardInterrupt:
