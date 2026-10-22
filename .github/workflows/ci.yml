@@ -1,0 +1,69 @@
+# Offline CI: no real LLM anywhere. The wheel job scans against tests/support/stub_ollama.py.
+# Replaces the earlier wheels-check.yml (its grammar check is the first step of `test`).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Check tree-sitter grammar wheels
+        run: python scripts/check_wheels.py
+      - name: Tests (no live_llm)
+        run: python -m pytest -q
+
+  wheel:
+    name: wheel (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Install the wheel (not the source tree) into a clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="$RUNNER_TEMP/clean/Scripts"; EXE=codewhy.exe; else BIN="$RUNNER_TEMP/clean/bin"; EXE=codewhy; fi
+          "$BIN/python" -m pip install dist/*.whl pytest
+          echo "CLEAN_BIN=$BIN" >> "$GITHUB_ENV"
+          echo "CODEWHY_EXE=$BIN/$EXE" >> "$GITHUB_ENV"
+      - name: Wheel contents
+        run: |
+          export CODEWHY_WHEEL="$(ls dist/*.whl)"
+          "$CLEAN_BIN/python" -m pytest -q -p no:cacheprovider tests/test_packaging.py
+      - name: Install and scan against the stub Ollama server (second run must make zero model calls)
+        working-directory: ${{ runner.temp }}
+        run: |
+          VERSION="$("$CLEAN_BIN/python" -c 'import codewhy; print(codewhy.__version__)')"
+          "$CLEAN_BIN/python" "$GITHUB_WORKSPACE/scripts/wheel_smoke.py" --codewhy "$CODEWHY_EXE" --version "$VERSION"

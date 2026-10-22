@@ -1,0 +1,19 @@
+# Projects in the codewhy quality evaluation. `path` is the folder that is scanned and
+# discovered (relative to the repository root); `docs` is the generated PROJECT_DOCS.md
+# used as condition (c). Only projects whose output may be published belong here.
+#
+# 2026-10-22: the project lead cleared only codewhy itself for publication, so the
+# corpus has one project. Results must not be generalized beyond it.
+
+[[project]]
+name = "codewhy"
+path = "src/codewhy"
+docs = "examples/codewhy/PROJECT_DOCS.md"
+license = "MIT (this repository)"
+publishable = true
+notes = "The codewhy package itself (mid-size: about 40 Python modules). Written by the team, so it is not an unfamiliar project for the scorers."
+
+# To add a project (recommended: one of your own, one small open-source project you
+# did not write), add an entry with `git = "<url>"` and `commit = "<sha>"` for
+# open-source code, a license note, and `publishable = false` unless its output may
+# be committed.
