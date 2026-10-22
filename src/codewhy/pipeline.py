@@ -96,6 +96,23 @@ def run_pass(pass_name: str, subject: str, inputs: object, fn: Callable[[], Pass
     return result
 
 
+def config_fingerprint_for(config: Config) -> str:
+    """`config_fp` for every cache key of a run (also used by the dry-run plan)."""
+    llm = config.llm
+    return config_fingerprint(
+        {
+            "provider": llm.provider,
+            "model": llm.effective_model,
+            "context_tokens": llm.effective_context_tokens,
+            "max_output_tokens": llm.effective_max_output_tokens,
+            "temperature": llm.temperature,
+            "seed": llm.seed,
+            "reasoning_effort": llm.reasoning_effort,
+            "structured_output": llm.structured_output,
+        }
+    )
+
+
 def run_pipeline(
     project: ProjectModel,
     provider: Provider,
@@ -146,18 +163,7 @@ def _run_pipeline(
         except CacheIOError as exc:
             cache_enabled[0] = False
             _cache_warning(exc)
-    config_fp = config_fingerprint(
-        {
-            "provider": config.llm.provider,
-            "model": config.llm.effective_model,
-            "context_tokens": config.llm.effective_context_tokens,
-            "max_output_tokens": config.llm.effective_max_output_tokens,
-            "temperature": config.llm.temperature,
-            "seed": config.llm.seed,
-            "reasoning_effort": config.llm.reasoning_effort,
-            "structured_output": config.llm.structured_output,
-        }
-    )
+    config_fp = config_fingerprint_for(config)
     graph = project.graph
     budget = pass_budget(config)
     counts = {"generated": 0, "cached": 0, "failed": 0, "skipped": 0}

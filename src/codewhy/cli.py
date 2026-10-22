@@ -2,29 +2,45 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib.resources import files as package_files
 from datetime import UTC, datetime
+import functools
 import json
+import os
 from pathlib import Path
 import sys
-import threading
-import time
-from typing import Annotated, NoReturn
+import traceback
+from typing import Annotated, NoReturn, TypeVar
 
+from rich.console import Console
+from rich.table import Table
 import typer
 
 from codewhy import __version__
-from codewhy.cache.db import CacheError
+from codewhy.cache.db import CacheDB, CacheError
 from codewhy.config import CONFIG_FILE_NAME, Config, ConfigError, render_toml, resolve_config
 from codewhy.consent import ConsentError, ensure_remote_ack
-from codewhy.ignore import TOOLIGNORE_FILE_NAME, DiscoveryError
+from codewhy.ignore import CACHE_DIR_NAME, TOOLIGNORE_FILE_NAME, DiscoveryError
 from codewhy.graph.builder import imported_by, imports_of, most_depended_on
 from codewhy.llm.budget import prompt_budget
 from codewhy.llm.provider import ProviderError, build_provider
 from codewhy.pipeline import run_pipeline
-from codewhy.project import build_project
+from codewhy.plan import HEADERS, plan_footer_lines, plan_header_lines, plan_rows, plan_scan, plan_text, skipped_files
+from codewhy.progress import (
+    EXIT_INTERRUPTED,
+    INTERRUPT_MESSAGE,
+    ProgressReporter,
+    collected_warnings,
+    exit_code_for,
+    stream_encoding,
+    summary_line,
+    terminal_text,
+)
+from codewhy.project import ProjectModel, build_project
 from codewhy.render.docs_tree import OutputError, render_docs_tree, validate_output_targets, write_outputs
 from codewhy.render.single_file import render_single_file
+from codewhy.render.writer import remove_stale_temps
 
 app = typer.Typer(
     name="codewhy",
@@ -48,17 +64,56 @@ ModelOpt = Annotated[str | None, typer.Option(help="Override llm.model.")]
 OutputOpt = Annotated[str | None, typer.Option("--output", help="Output mode: single-file, docs-tree, or both.")]
 
 
+DEBUG_ENV = "CODEWHY_DEBUG"
+Command = TypeVar("Command", bound=Callable[..., None])
+
+
 def fail(message: str) -> NoReturn:
     """Print one error line to stderr and exit 1 (no traceback)."""
-    typer.echo(f"error: {message}", err=True)
+    say(f"error: {message}", err=True)
     raise typer.Exit(1)
+
+
+def guarded(command: Command) -> Command:
+    """Expected failures exit through `fail`; anything else is a short internal error.
+
+    The traceback is shown only with CODEWHY_DEBUG=1. The message names the
+    exception type, never its text (which could quote source or model output).
+    """
+
+    @functools.wraps(command)
+    def run(*args: object, **kwargs: object) -> None:
+        try:
+            command(*args, **kwargs)
+        except (typer.Exit, typer.Abort, typer.TyperException, KeyboardInterrupt):
+            raise
+        except BrokenPipeError:
+            # The reader went away (`| head`): stop quietly, and keep Python from
+            # complaining again while flushing stdout at exit.
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, sys.stdout.fileno())
+            except (OSError, ValueError, AttributeError):
+                pass
+            raise typer.Exit(1) from None
+        except Exception as exc:
+            if os.environ.get(DEBUG_ENV, "") not in ("", "0"):
+                typer.echo(traceback.format_exc(), err=True, nl=False)
+            say(
+                f"error: internal error ({type(exc).__name__}). "
+                f"Re-run with {DEBUG_ENV}=1 to see the traceback, and please report it.",
+                err=True,
+            )
+            raise typer.Exit(1) from None
+
+    return run  # type: ignore[return-value]
 
 
 def require_dir(path: Path) -> Path:
     if not path.exists():
         fail(f"path does not exist: {path}")
     if not path.is_dir():
-        fail(f"path is not a directory: {path}")
+        fail(f"expected a folder, but {path} is a file")
     return path
 
 
@@ -90,6 +145,7 @@ def main(
 
 
 @app.command()
+@guarded
 def init(path: PathArg = Path(".")) -> None:
     """Write codewhy.toml and .toolignore into PATH (never overwrites)."""
     root = require_dir(path)
@@ -107,6 +163,7 @@ def init(path: PathArg = Path(".")) -> None:
 
 
 @config_app.command("show")
+@guarded
 def config_show(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
     """Print the resolved configuration (defaults + codewhy.toml + options, presets applied)."""
     root = require_dir(path)
@@ -122,6 +179,7 @@ def config_show(path: PathArg = Path("."), provider: ProviderOpt = None, model: 
 
 
 @app.command()
+@guarded
 def doctor(path: PathArg = Path("."), provider: ProviderOpt = None, model: ModelOpt = None) -> None:
     """Check that the configured model is reachable (preflight only; no source code is sent)."""
     root = require_dir(path)
@@ -149,121 +207,166 @@ def doctor(path: PathArg = Path("."), provider: ProviderOpt = None, model: Model
     typer.echo("ok: preflight passed")
 
 
+NO_SUPPORTED_FILES = "No supported source files found (supported: .py .js .jsx .mjs .cjs .ts .tsx .mts .cts)"
+
+
+def say(message: str, *, err: bool = False) -> None:
+    """Echo one line, degraded to what the console encoding can show (files stay UTF-8)."""
+    stream = sys.stderr if err else sys.stdout
+    typer.echo(terminal_text(message, stream_encoding(stream)), err=err)
+
+
+def _say_warnings(warnings: list[str]) -> None:
+    for message in warnings:
+        say(f"warning: {message}", err=True)
+
+
+def _docs_tree_targets(project: ProjectModel, config: Config) -> list[str]:
+    prefix = config.output.dir.rstrip("/") + "/"
+    targets = [prefix + "PROJECT_OVERVIEW.md"]
+    targets += [prefix + ("_module.md" if m.path == "." else f"{m.path}/_module.md") for m in project.modules]
+    targets += [prefix + path + ".md" for path, fs in project.structures.items() if fs.status == "ok"]
+    return targets
+
+
 @app.command()
+@guarded
 def scan(
     path: PathArg = Path("."),
     provider: ProviderOpt = None,
     model: ModelOpt = None,
     output: OutputOpt = None,
+    full: Annotated[bool, typer.Option("--full", help="Ignore cache reads; regenerate and rewrite everything.")] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="No model calls, no writes: print the plan and estimates.")
+    ] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Acknowledge sending source to a remote endpoint.")] = False,
-    force: Annotated[bool, typer.Option("--force", help="Overwrite non-CodeWhy output files.")] = False,
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress per-item progress lines.")] = False,
-    full: Annotated[bool, typer.Option("--full", help="Regenerate all passes, bypassing cache reads.")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite output files codewhy did not generate.")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", help="No progress output; errors and the summary line only.")] = False,
 ) -> None:
     """Document the project in PATH."""
     root = require_dir(path)
     config = load_or_fail(root, {"llm.provider": provider, "llm.model": model, "output.mode": output})
+    if dry_run:
+        _dry_run(root, config)
+        return
+    is_tty = sys.stdout.isatty()
+    reporter = ProgressReporter(
+        quiet=quiet,
+        echo=say,
+        console=Console(file=sys.stdout) if is_tty and not quiet else None,
+        project_label=root.resolve().name,
+    )
     target = None
-    try:
-        target = build_provider(config)
-        stage_started: dict[str, float] = {}
-        stage_lock = threading.Lock()
+    with collected_warnings() as warnings:
+        try:
+            target = build_provider(config)
+            # Consent first and outside the spinner: it may ask on the terminal.
+            ensure_remote_ack(
+                target,
+                assume_yes=yes,
+                acknowledged_in_config=config.llm.acknowledge_remote,
+                is_tty=sys.stdin.isatty(),
+                ask=lambda message: typer.confirm(message, default=False),
+                tell=say,
+            )
+            reporter.start(f"checking provider {target.endpoint_label}…")
+            target.preflight()
+            # A temp file left by a crashed run would otherwise be discovered as an "other file".
+            remove_stale_temps(root.resolve(), config.output.dir)
+            project = build_project(root, config, on_stage=reporter.on_stage)
+            if not project.files:
+                reporter.stop()
+                fail(NO_SUPPORTED_FILES)
 
-        def on_stage(stage: str, detail: str) -> None:
-            if quiet:
-                return
-            with stage_lock:
-                if detail.startswith("started"):
-                    stage_started[stage] = time.perf_counter()
-                    typer.echo(f"{stage}: {detail}")
-                    return
-                elapsed = ""
-                started = stage_started.pop(stage, None)
-                if started is not None:
-                    elapsed = f" ({time.perf_counter() - started:.2f}s)"
-                typer.echo(f"{stage}: {detail}{elapsed}")
+            # Every overwrite check runs before the cache or any output is written.
+            output_targets: list[str] = []
+            if config.output.mode in {"single-file", "both"}:
+                output_targets.append(config.output.single_file_name)
+            if config.output.mode in {"docs-tree", "both"}:
+                output_targets += _docs_tree_targets(project, config)
+            validate_output_targets(root, dict.fromkeys(output_targets, ""), force=force)
 
-        if not quiet:
-            # Provider preflight can wait for a configured network timeout. Give
-            # the user immediate feedback while keeping preflight before any
-            # project discovery or source-file reads.
-            typer.echo(f"checking provider {target.endpoint_label}...")
-        ensure_remote_ack(
-            target,
-            assume_yes=yes,
-            acknowledged_in_config=config.llm.acknowledge_remote,
-            is_tty=sys.stdin.isatty(),
-            ask=lambda message: typer.confirm(message, default=False),
-            tell=typer.echo,
-        )
-        on_stage("provider preflight", "started")
-        target.preflight()
-        on_stage("provider preflight", "complete")
-        project = build_project(root, config, on_stage=on_stage)
+            skips = skipped_files(project)
+            reporter.set_total(len(project.structures) - len(skips) + len(project.modules) + 1)
+            run_result = run_pipeline(
+                project,
+                target,
+                config,
+                clock=lambda: datetime.now(UTC),
+                on_item=reporter.on_item,
+                on_stage=reporter.on_stage,
+                full=full,
+            )
+            targets: dict[str, str] = {}
+            rendered = None
+            if config.output.mode in {"single-file", "both"}:
+                rendered = render_single_file(project, run_result, config, version=__version__)
+                targets[config.output.single_file_name] = rendered.text
+            if config.output.mode in {"docs-tree", "both"}:
+                tree = render_docs_tree(project, run_result, config, version=__version__)
+                prefix = config.output.dir.rstrip("/") + "/"
+                targets.update({prefix + relative: text for relative, text in tree.items()})
+            tree_dir = config.output.dir if config.output.mode in {"docs-tree", "both"} else None
+            write_outputs(root, targets, output_dir=tree_dir, force=force)
+        except KeyboardInterrupt:
+            reporter.stop()
+            say(INTERRUPT_MESSAGE, err=True)
+            raise typer.Exit(EXIT_INTERRUPTED) from None
+        except (ConfigError, ConsentError, ProviderError, DiscoveryError, OutputError, CacheError) as exc:
+            reporter.stop()
+            _say_warnings(warnings)
+            fail(str(exc))
+        finally:
+            reporter.stop()
+            if target is not None:
+                close = getattr(target, "close", None)
+                if close is not None:
+                    close()
+
+    _say_warnings(warnings)
+    for skip_path, reason in skips:
+        say(f"skipped {skip_path} ({reason})")
+    counts = run_result.counts
+    if rendered is not None:
+        say(summary_line(len(project.files), counts, len(skips), config.output.single_file_name, rendered.estimated_tokens, rendered.level))
+        if rendered.over_budget:
+            say("warning: Level 2 output exceeds the configured token budget.", err=True)
+    else:
+        say(summary_line(len(project.files), counts, len(skips), None, None, 0))
+    code = exit_code_for(run_result, skips, fatal=False)
+    if code:
+        raise typer.Exit(code)
+
+
+def _dry_run(root: Path, config: Config) -> None:
+    """Plan only: no provider is built, nothing is prompted for, nothing is written."""
+    with collected_warnings() as warnings:
+        try:
+            project = build_project(root, config)
+        except DiscoveryError as exc:
+            fail(str(exc))
         if not project.files:
-            fail("No supported source files found (supported: .py .js .jsx .mjs .cjs .ts .tsx .mts .cts)")
-
-        # Refuse handwritten output before opening the cache, preserving the
-        # no-partial-write boundary even though successful passes are cached.
-        output_targets: dict[str, str] = {}
-        if config.output.mode in {"single-file", "both"}:
-            output_targets[config.output.single_file_name] = ""
-        if config.output.mode in {"docs-tree", "both"}:
-            output_targets[config.output.dir.rstrip("/") + "/PROJECT_OVERVIEW.md"] = ""
-            for module in project.modules:
-                relative = "_module.md" if module.path == "." else f"{module.path}/_module.md"
-                output_targets[config.output.dir.rstrip("/") + "/" + relative] = ""
-            for path, structure in project.structures.items():
-                if structure.status == "ok":
-                    output_targets[config.output.dir.rstrip("/") + "/" + path + ".md"] = ""
-        validate_output_targets(root, output_targets, force=force)
-
-        total = sum(1 for structure in project.structures.values() if structure.status == "ok") + len(project.modules) + 1
-        index = 0
-
-        def on_item(pass_name: str, subject: str, status: str) -> None:
-            nonlocal index
-            index += 1
-            if not quiet:
-                typer.echo(f"[{index}/{total}] {pass_name} {subject} ({status})")
-
-        run_result = run_pipeline(
-            project, target, config, clock=lambda: datetime.now(UTC), on_item=on_item, on_stage=on_stage, full=full
-        )
-        targets: dict[str, str] = {}
-        rendered = None
-        if config.output.mode in {"single-file", "both"}:
-            rendered = render_single_file(project, run_result, config, version=__version__)
-            targets[config.output.single_file_name] = rendered.text
-        if config.output.mode in {"docs-tree", "both"}:
-            tree = render_docs_tree(project, run_result, config, version=__version__)
-            prefix = config.output.dir.rstrip("/") + "/"
-            targets.update({prefix + relative: text for relative, text in tree.items()})
-        write_outputs(root, targets, output_dir=config.output.dir if config.output.mode in {"docs-tree", "both"} else None, force=force)
-        for skip in sorted(project.skips, key=lambda item: item.path):
-            typer.echo(f"skipped {skip.path} ({skip.reason})")
-        skipped = len(project.skips) + run_result.counts["skipped"]
-        generated = run_result.counts["generated"]
-        cached = run_result.counts["cached"]
-        failed = run_result.counts["failed"]
-        if rendered is not None:
-            typer.echo(f"{len(project.files)} files, {cached} cached, {generated} generated, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
-            if rendered.over_budget:
-                typer.echo("warning: Level 2 output exceeds the configured token budget.", err=True)
-        else:
-            typer.echo(f"{len(project.files)} files, {cached} cached, {generated} generated, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
-        if skipped or failed:
-            raise typer.Exit(2)
-    except KeyboardInterrupt:
-        typer.echo("scan interrupted; no output was written.", err=True)
-        raise typer.Exit(130) from None
-    except (ConfigError, ConsentError, ProviderError, DiscoveryError, OutputError, CacheError) as exc:
-        fail(str(exc))
-    finally:
-        if target is not None:
-            close = getattr(target, "close", None)
-            if close is not None:
-                close()
+            _say_warnings(warnings)
+            fail(NO_SUPPORTED_FILES)
+        plan = plan_scan(project, config, CacheDB(project.root / CACHE_DIR_NAME / "cache.db"))
+    _say_warnings(warnings)
+    if sys.stdout.isatty():
+        console = Console(file=sys.stdout)
+        safe = lambda text: terminal_text(text, console.encoding)  # noqa: E731
+        for line in plan_header_lines(plan):
+            console.print(safe(line), markup=False, highlight=False)
+        table = Table()
+        for number, header in enumerate(HEADERS):
+            table.add_column(safe(header), justify="right" if 0 < number < len(HEADERS) - 1 else "left")
+        for row in plan_rows(plan):
+            table.add_row(*[safe(cell) for cell in row])
+        console.print(table)
+        for line in plan_footer_lines(plan):
+            console.print(safe(line), markup=False, highlight=False)
+        return
+    for line in plan_text(plan):
+        say(line)
 
 
 def echo_utf8(message: str) -> None:
@@ -276,6 +379,7 @@ def echo_utf8(message: str) -> None:
 
 
 @app.command("inspect", hidden=True)
+@guarded
 def inspect_project(path: PathArg = Path(".")) -> None:
     """Print deterministic discovery, extraction, and graph data as JSON."""
     root = require_dir(path)

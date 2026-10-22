@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from codewhy.config import Config
 from codewhy.pipeline import RunResult
 from codewhy.project import ProjectModel
 
+from .writer import write_atomic
 from .sections import frontmatter, file_section, module_section, project_overview_sections
 
 CODEWHY_MARKER = "generated_by: codewhy"
@@ -125,14 +126,28 @@ def _stale_targets(root: Path, output_dir: Path, current: set[str]) -> list[Path
     return sorted(stale)
 
 
+def _check_writable(root: Path, paths: Iterable[Path]) -> None:
+    """Refuse before the first write when a target folder cannot be written (avoids a partial set).
+
+    Best effort: `os.access` can be optimistic (e.g. Windows ACLs); the write itself still reports errors.
+    """
+    for folder in sorted({path.parent for path in paths}):
+        existing = folder
+        while not existing.exists() and existing != root:
+            existing = existing.parent
+        if not os.access(existing, os.W_OK):
+            raise OutputError(f"cannot write to {existing}: permission denied")
+
+
 def write_outputs(root: Path, targets: Mapping[str, str], *, output_dir: str | None = None, force: bool = False) -> None:
     """Validate and write generated targets, then remove safe stale tree docs."""
     resolved_root = root.resolve()
     absolute = validate_output_targets(resolved_root, targets, force=force)
+    _check_writable(resolved_root, absolute.values())
     for relative, path in absolute.items():
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(_normalize(targets[relative]), encoding="utf-8", newline="\n")
+            write_atomic(path, _normalize(targets[relative]))
         except OSError as exc:
             raise OutputError(f"cannot write {path}: {exc.strerror or exc}") from None
     if output_dir is not None:
