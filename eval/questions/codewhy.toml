@@ -1,0 +1,53 @@
+# Newcomer questions about the codewhy package (src/codewhy). Drafted by the agent;
+# every ground_truth must be written by a person from the code before scoring.
+# The agent must not invent ground truth (task 09 Requirement 6).
+
+[[question]]
+id = "cache-seam"
+text = "Where is it decided whether a summarization pass is answered from the cache or sent to the model?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "corrupt-cache"
+text = "What happens when the cache database file is corrupt or has an unknown schema version?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "new-provider"
+text = "Which files would I change to add support for a new kind of LLM provider?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "discovery"
+text = "How does codewhy decide which files in a folder to document and which to ignore?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "large-file"
+text = "What happens when a single source file is too large to fit into one prompt?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "exit-codes"
+text = "Where is the exit code of `codewhy scan` decided, and what does exit code 2 mean?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "markdown-injection"
+text = "How does codewhy stop text written by the model from breaking the structure of the generated Markdown?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "ctrl-c"
+text = "What happens if the user presses Ctrl-C in the middle of a scan, and what does the next run do?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "entry-point"
+text = "How is a project's entry point detected, and can the user override it?"
+ground_truth = "TODO(user)"
+
+[[question]]
+id = "layout"
+text = "Which file would I change to alter the section layout of PROJECT_DOCS.md?"
+ground_truth = "TODO(user)"
