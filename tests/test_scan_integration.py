@@ -190,7 +190,7 @@ def test_summary_line_counts_and_skip_lines_come_first(tmp_path: Path, monkeypat
 
     # 4 discovered files (syntax_error.py among them), 3 healthy passes + 1 module + project.
     assert lines[-1] == (
-        f"4 files, 5 generated, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens)} tokens (level 0)."
+        f"4 files, 5 generated, 0 cached, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens)} tokens (level 0)."
     )
 
 
@@ -227,7 +227,10 @@ def test_gitignore_is_never_read_and_nothing_is_written_outside_the_root(
     assert sorted(p.name for p in tmp_path.iterdir()) == outside_before
     assert {name: (root / name).read_bytes() for name in source_before} == source_before
     written = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()} - set(source_before)
-    assert all(path == "PROJECT_DOCS.md" or path.startswith("codewhy-docs/") for path in written)
+    assert all(
+        path == "PROJECT_DOCS.md" or path.startswith("codewhy-docs/") or path.startswith(".codewhy/")
+        for path in written
+    )
 
 
 def test_docs_tree_mode_writes_only_the_tree_to_codewhy_docs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,7 +268,7 @@ def test_all_failed_run_still_writes_placeholders_and_exits_2(tmp_path: Path, mo
     install_fake(monkeypatch, FakeProvider(respond=lambda call: TransientError("down")))
     result = run_cli(["scan", str(tmp_path), "--quiet"])
     assert result.exit_code == 2
-    assert ", 0 generated, 3 failed, 0 skipped." in result.stdout
+    assert ", 0 generated, 0 cached, 3 failed, 0 skipped." in result.stdout
     assert (tmp_path / "PROJECT_DOCS.md").read_text(encoding="utf-8").count("[generation failed]") >= 3
 
 

@@ -73,7 +73,7 @@ def test_every_prompt_fits_the_budget(fixture: str, size: tuple[int, int], mode:
     checked = BudgetCheckingFakeProvider(inner, budget)  # fails the test on any over-budget prompt
     project = project_for(fixture, tmp_path)
 
-    result = run_pipeline(project, checked, config, clock=lambda: FIXED_TIME)
+    result = run_pipeline(project, checked, config, clock=lambda: FIXED_TIME, use_cache=False)
 
     every = [*result.files.values(), *result.modules.values(), result.project]
     for item in every:
@@ -89,7 +89,7 @@ def test_every_prompt_fits_the_budget(fixture: str, size: tuple[int, int], mode:
 def test_wide_module_climbs_to_step_3_and_cuts_edges(tmp_path: Path) -> None:
     config = Config.model_validate({"llm": {"context_tokens": 2400, "max_output_tokens": 256}})
     inner = FakeProvider(respond=verbose)
-    run_pipeline(project_for("wide_module", tmp_path), BudgetCheckingFakeProvider(inner, prompt_budget(2400, 256)), config, clock=lambda: FIXED_TIME)
+    run_pipeline(project_for("wide_module", tmp_path), BudgetCheckingFakeProvider(inner, prompt_budget(2400, 256)), config, clock=lambda: FIXED_TIME, use_cache=False)
     (module_prompt,) = [c.prompt for c in inner.calls if "## Module\npath: shop\n" in c.prompt]
     assert "more files omitted from this prompt" in module_prompt
     assert "more edges" in module_prompt
@@ -99,7 +99,7 @@ def test_oversized_file_chunks_at_a_moderate_context(tmp_path: Path) -> None:
     config = Config.model_validate({"llm": {"context_tokens": 2400, "max_output_tokens": 256}})
     project = project_for("oversized_file", tmp_path)
     inner = FakeProvider()
-    result = run_pipeline(project, BudgetCheckingFakeProvider(inner, prompt_budget(2400, 256)), config, clock=lambda: FIXED_TIME)
+    result = run_pipeline(project, BudgetCheckingFakeProvider(inner, prompt_budget(2400, 256)), config, clock=lambda: FIXED_TIME, use_cache=False)
     assert result.files["inventory/report.py"].failure is None
     assert sum("## This part: lines" in c.prompt for c in inner.calls) > 3
     assert sum("## Part summaries" in c.prompt for c in inner.calls) == 1

@@ -14,6 +14,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from codewhy import __version__
+from codewhy.cache.db import CacheError
 from codewhy.config import CONFIG_FILE_NAME, Config, ConfigError, render_toml, resolve_config
 from codewhy.consent import ConsentError, ensure_remote_ack
 from codewhy.ignore import TOOLIGNORE_FILE_NAME, DiscoveryError
@@ -22,7 +23,7 @@ from codewhy.llm.budget import prompt_budget
 from codewhy.llm.provider import ProviderError, build_provider
 from codewhy.pipeline import run_pipeline
 from codewhy.project import build_project
-from codewhy.render.docs_tree import OutputError, render_docs_tree, write_outputs
+from codewhy.render.docs_tree import OutputError, render_docs_tree, validate_output_targets, write_outputs
 from codewhy.render.single_file import render_single_file
 
 app = typer.Typer(
@@ -157,7 +158,7 @@ def scan(
     yes: Annotated[bool, typer.Option("--yes", help="Acknowledge sending source to a remote endpoint.")] = False,
     force: Annotated[bool, typer.Option("--force", help="Overwrite non-CodeWhy output files.")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", help="Suppress per-item progress lines.")] = False,
-    full: Annotated[bool, typer.Option("--full", help="Regenerate all passes (accepted as a no-op before caching).")] = False,
+    full: Annotated[bool, typer.Option("--full", help="Regenerate all passes, bypassing cache reads.")] = False,
 ) -> None:
     """Document the project in PATH."""
     root = require_dir(path)
@@ -202,6 +203,21 @@ def scan(
         if not project.files:
             fail("No supported source files found (supported: .py .js .jsx .mjs .cjs .ts .tsx .mts .cts)")
 
+        # Refuse handwritten output before opening the cache, preserving the
+        # no-partial-write boundary even though successful passes are cached.
+        output_targets: dict[str, str] = {}
+        if config.output.mode in {"single-file", "both"}:
+            output_targets[config.output.single_file_name] = ""
+        if config.output.mode in {"docs-tree", "both"}:
+            output_targets[config.output.dir.rstrip("/") + "/PROJECT_OVERVIEW.md"] = ""
+            for module in project.modules:
+                relative = "_module.md" if module.path == "." else f"{module.path}/_module.md"
+                output_targets[config.output.dir.rstrip("/") + "/" + relative] = ""
+            for path, structure in project.structures.items():
+                if structure.status == "ok":
+                    output_targets[config.output.dir.rstrip("/") + "/" + path + ".md"] = ""
+        validate_output_targets(root, output_targets, force=force)
+
         total = sum(1 for structure in project.structures.values() if structure.status == "ok") + len(project.modules) + 1
         index = 0
 
@@ -212,7 +228,7 @@ def scan(
                 typer.echo(f"[{index}/{total}] {pass_name} {subject} ({status})")
 
         run_result = run_pipeline(
-            project, target, config, clock=lambda: datetime.now(UTC), on_item=on_item, on_stage=on_stage
+            project, target, config, clock=lambda: datetime.now(UTC), on_item=on_item, on_stage=on_stage, full=full
         )
         targets: dict[str, str] = {}
         rendered = None
@@ -228,19 +244,21 @@ def scan(
             typer.echo(f"skipped {skip.path} ({skip.reason})")
         skipped = len(project.skips) + run_result.counts["skipped"]
         generated = run_result.counts["generated"]
+        cached = run_result.counts["cached"]
         failed = run_result.counts["failed"]
+        cache_text = f", {cached} cached"
         if rendered is not None:
-            typer.echo(f"{len(project.files)} files, {generated} generated, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
+            typer.echo(f"{len(project.files)} files, {generated} generated{cache_text}, {failed} failed, {skipped} skipped. {config.output.single_file_name} ≈ {rendered.estimated_tokens} tokens (level {rendered.level}).")
             if rendered.over_budget:
                 typer.echo("warning: Level 2 output exceeds the configured token budget.", err=True)
         else:
-            typer.echo(f"{len(project.files)} files, {generated} generated, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
+            typer.echo(f"{len(project.files)} files, {generated} generated{cache_text}, {failed} failed, {skipped} skipped. docs-tree output written (level 0).")
         if skipped or failed:
             raise typer.Exit(2)
     except KeyboardInterrupt:
         typer.echo("scan interrupted; no output was written.", err=True)
         raise typer.Exit(130) from None
-    except (ConfigError, ConsentError, ProviderError, DiscoveryError, OutputError) as exc:
+    except (ConfigError, ConsentError, ProviderError, DiscoveryError, OutputError, CacheError) as exc:
         fail(str(exc))
     finally:
         if target is not None:

@@ -61,7 +61,7 @@ def scripted(call: Call) -> dict:
 def scripted_run(config: Config | None = None, respond=scripted, clock=lambda: FIXED_TIME):
     config = config or Config()
     project = build_project(FIXTURES / "flat_scripts", config)
-    return project, run_pipeline(project, FakeProvider(respond=respond), config, clock=clock), config
+    return project, run_pipeline(project, FakeProvider(respond=respond), config, clock=clock, use_cache=False), config
 
 
 def check_golden(name: str, text: str) -> None:
