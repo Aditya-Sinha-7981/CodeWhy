@@ -149,3 +149,21 @@ free on both.
   `RESULTS.md`, plus the lead's ground truth and scoring.
 - Secret scan of the staged diff (Google/OpenAI key patterns, filled
   `GEMINI_API_KEY=`): nothing found.
+
+## 2026-10-22 — first CI run (GitHub Actions run 39730795579)
+
+- **`test` job:**
+  - ubuntu and macOS, Python 3.11/3.12/3.13: **Passed** (all 6).
+  - windows, Python 3.11/3.12/3.13: **Failed**. Two test portability bugs
+    of mine, not code defects; 812–813 of 814 tests passed.
+    1. `test_atomic_write.py::test_docs_tree_writes_nothing_when_any_overwrite_check_fails`
+       looked for `codewhy-docs/main.py.md`. The error message correctly
+       names the absolute OS path, which on Windows uses backslashes. The test
+       now builds the expected text with `Path`.
+    2. `test_stub_ollama.py::test_script_starts_reports_its_port_and_stops_cleanly`
+       (3.11, 3.12) expected `ConnectError` once the stub stopped. Windows
+       retries a closed localhost port for about 2 s, so the 2 s request
+       timed out instead. Both errors now count as "server gone".
+- **`wheel` job:** **Not run** (skipped because `test` failed). It runs on
+  the next push.
+- Local suite after the fix: 821 passed, 11 skipped.

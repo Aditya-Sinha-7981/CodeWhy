@@ -90,5 +90,7 @@ def test_script_starts_reports_its_port_and_stops_cleanly() -> None:
     finally:
         process.terminate()
         process.wait(timeout=10)
-    with pytest.raises(httpx.ConnectError):
+    # A refused connection on Linux/macOS; on Windows a closed localhost port is
+    # retried for about two seconds first, so the attempt can time out instead.
+    with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
         httpx.get(f"http://127.0.0.1:{port}/api/version", timeout=2)

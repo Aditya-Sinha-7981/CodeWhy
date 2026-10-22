@@ -112,6 +112,7 @@ def test_docs_tree_writes_nothing_when_any_overwrite_check_fails(tmp_path: Path,
     before = snapshot_tree(tmp_path)
     result = run_cli(["scan", str(tmp_path), "--output", "both"])
     assert result.exit_code == 1
-    assert "codewhy-docs/main.py.md" in result.stderr and "--force" in result.stderr
+    # The message names the file the OS way (backslashes on Windows).
+    assert str(Path("codewhy-docs") / "main.py.md") in result.stderr and "--force" in result.stderr
     assert snapshot_tree(tmp_path) == before  # no PROJECT_DOCS.md, no other tree file, no cache
     assert fake.calls == []
