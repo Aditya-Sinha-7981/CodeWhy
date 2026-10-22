@@ -184,7 +184,13 @@ files, and `init` never overwrites an existing file (it skips it and says so).
 don't count); `1` fatal error (bad config, provider unreachable, remote not
 acknowledged, refused overwrite); `2` run completed but at least one file was
 skipped due to a parse/size/decode problem or at least one pass ended in
-`[generation failed]`.
+`[generation failed]`; `130` interrupted (Ctrl-C): prints "Interrupted. Progress
+is saved in the cache; re-run to resume.", keeps committed cache rows, leaves
+previous output files untouched. Expected failures print one `error:` line and
+no traceback; an unexpected exception prints `error: internal error (<type>)`
+and exits `1`, with the traceback only when `CODEWHY_DEBUG=1`. Library warnings
+(rebuilt cache, unreadable metadata) are collected and printed after the item
+lines, before the summary.
 
 **Progress output** (unless `--quiet`): one line per pass item, e.g.
 `[7/18] file  src/solver.py  (generated)` / `(cached)`, then a final summary:
@@ -194,7 +200,18 @@ skipped due to a parse/size/decode problem or at least one pass ended in
 hits vs misses, number of LLM calls and estimated input tokens. File-pass
 numbers are exact (prompts are assembled without calling the model).
 Module/project-pass numbers are upper bounds because their prompts depend on
-file summaries that may not exist yet.
+file summaries that may not exist yet: every module/project item counts as a
+call (their hits are shown as unknown, since only the read-only `peek` is used),
+and their tokens come from prompts built with maximum-length placeholder texts.
+Chunked files report chunk + combine calls exactly; their combine-prompt tokens
+are an upper bound. `--dry-run` builds no provider, never prompts, and writes
+nothing (not even `.codewhy/`); with a remote provider it adds "This would send
+≈ N tokens of your source to <host>."
+
+Progress is one line per pass item on stdout. On a TTY a `rich` spinner shows
+the current stage/request above them; elsewhere output is plain lines with no
+control codes. Terminal text falls back to ASCII (`—`→`-`, `≈`→`~`, …) when the
+console encoding cannot show it; files are always UTF-8.
 
 ## Config, ignore, and discovery
 
@@ -802,6 +819,14 @@ If the target file already exists and does not begin with codewhy frontmatter
 (`generated_by: codewhy`), the run exits `1` with a message unless `--force`
 is given. In docs-tree mode, stale per-file docs for files that no longer exist
 are removed, but only files carrying codewhy frontmatter.
+
+Every overwrite and writability check runs before anything is written. Each
+file is written atomically: `<name>.<16 hex>.tmp` in the same folder, fsync,
+then `os.replace`, so a crash never leaves a truncated document. Atomicity is
+per file, not per tree: a docs-tree run killed between files can leave some
+documents updated; the next run repairs it. Temp files matching that exact name
+pattern (in the project root and the docs-tree folder, never through symlinks)
+are removed at the start of the next `scan`, before discovery.
 
 ## Privacy and remote endpoints
 

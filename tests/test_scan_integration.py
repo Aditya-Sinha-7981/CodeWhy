@@ -25,53 +25,12 @@ def test_scan_writes_default_output_and_summary(tmp_path: Path, monkeypatch: pyt
     assert fake.preflight_calls == 1
 
 
-def test_scan_reports_provider_check_before_pipeline_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    make_project(tmp_path, {"main.py": "def main():\n    return 1\n"})
-    install_fake(monkeypatch, FakeProvider())
-    result = run_cli(["scan", str(tmp_path)])
-    assert result.exit_code == 0, result.stderr
-    lines = result.stdout.splitlines()
-    assert lines[0] == "checking provider fake-provider..."
-    assert lines[1] == "provider preflight: started"
-    assert any(line.startswith("[1/") for line in lines)
-
-
 def test_scan_quiet_suppresses_provider_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     make_project(tmp_path, {"main.py": "x = 1\n"})
     install_fake(monkeypatch, FakeProvider())
     result = run_cli(["scan", str(tmp_path), "--quiet"])
     assert result.exit_code == 0, result.stderr
     assert "checking provider" not in result.stdout
-
-
-def test_scan_reports_safe_stage_progress_and_generation_boundaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    make_project(tmp_path, {"main.py": "secret = 'must not be printed'\n"})
-    install_fake(monkeypatch, FakeProvider())
-    result = run_cli(["scan", str(tmp_path)])
-    assert result.exit_code == 0, result.stderr
-    output = result.stdout
-    expected = [
-        "provider preflight: started",
-        "provider preflight: complete",
-        "discovery: started",
-        "discovery: complete:",
-        "extraction: started:",
-        "extraction: complete:",
-        "graph: started",
-        "graph: complete:",
-        "file generation: started:",
-        "file generation: complete:",
-        "module generation: started:",
-        "module generation: complete:",
-        "project generation: started:",
-        "project generation: complete:",
-    ]
-    positions = [output.index(item) for item in expected]
-    assert positions == sorted(positions)
-    assert "must not be printed" not in output
-    assert "file request main.py: started: attempt 1/2; prompt ~" in output
-    assert "file request main.py: complete: attempt 1/2" in output
-    assert "project request: started: attempt 1/2; prompt ~" in output
 
 
 def test_scan_quiet_suppresses_progress_and_both_writes_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,7 +67,7 @@ def test_scan_converts_interrupt_to_exit_130_without_writing(tmp_path: Path, mon
     monkeypatch.setattr(cli, "run_pipeline", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
     result = run_cli(["scan", str(tmp_path)])
     assert result.exit_code == 130
-    assert "scan interrupted; no output was written." in result.stderr
+    assert "Interrupted. Progress is saved in the cache; re-run to resume." in result.stderr
     assert not (tmp_path / "PROJECT_DOCS.md").exists()
 
 
@@ -187,13 +146,17 @@ def test_summary_line_counts_and_skip_lines_come_first(tmp_path: Path, monkeypat
     result = run_cli(["scan", str(root), "--quiet"])
     assert result.exit_code == 2
     lines = result.stdout.strip().split("\n")
-    assert lines[:-1] == ["skipped invalid_utf8.py (undecodable)", "skipped oversized.py (too_large)"]
+    assert lines[:-1] == [
+        "skipped invalid_utf8.py (undecodable)",
+        "skipped oversized.py (too_large)",
+        "skipped syntax_error.py (SyntaxError: invalid syntax (line 1))",
+    ]
     tokens = (root / "PROJECT_DOCS.md").read_text(encoding="utf-8")
     from codewhy.llm.budget import estimate_tokens
 
     # 4 discovered files (syntax_error.py among them), 3 healthy passes + 1 module + project.
     assert lines[-1] == (
-        f"4 files, 0 cached, 5 generated, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens)} tokens (level 0)."
+        f"4 files, 0 cached, 5 generated, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens):,} tokens (level 0)."
     )
 
 
