@@ -88,11 +88,13 @@ def project_key(
     modules: Sequence[Sequence[str]],
     project_edges: str,
     other_files: Sequence[str],
+    omitted: int = 0,
 ) -> str:
     module_values = sorted([[str(path), str(text)] for path, text in modules], key=lambda item: item[0])
     inputs = {
         "entry_point": entry_point,
         "modules": module_values,
+        "omitted": omitted,
         "project_edges": project_edges,
         "other_files": sorted(other_files),
     }

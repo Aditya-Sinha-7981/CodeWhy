@@ -63,3 +63,37 @@ def test_pipeline_version_is_part_of_every_key(monkeypatch) -> None:
         keys.project_key("c", None, [], "", []),
     )
     assert values != changed
+
+
+def test_member_order_never_affects_module_or_project_keys() -> None:
+    members = [["b.py", "B"], ["a.py", "A"]]
+    assert keys.module_key("c", "pkg", members, "", ["y", "x"]) == keys.module_key("c", "pkg", members[::-1], "", ["x", "y"])
+    modules = [["pkg", "P"], [".", "R"]]
+    assert keys.project_key("c", None, modules, "", ["b", "a"]) == keys.project_key("c", None, modules[::-1], "", ["a", "b"])
+
+
+def test_ladder_omitted_count_is_part_of_module_and_project_keys() -> None:
+    assert keys.module_key("c", "pkg", [], "", [], 0) != keys.module_key("c", "pkg", [], "", [], 1)
+    assert keys.project_key("c", None, [], "", [], 0) != keys.project_key("c", None, [], "", [], 1)
+
+
+def test_failed_marker_differs_from_every_real_text() -> None:
+    from codewhy.summarize.module_pass import UNAVAILABLE
+
+    assert keys.FAILED_MEMBER not in {UNAVAILABLE, "[generation failed]", ""}
+    failed = keys.module_key("c", "pkg", [["a.py", keys.FAILED_MEMBER]], "", [])
+    for text in (UNAVAILABLE, "[generation failed]", "", "Purpose."):
+        assert failed != keys.module_key("c", "pkg", [["a.py", text]], "", [])
+
+
+def test_config_fp_changes_every_key() -> None:
+    one, two = keys.config_fingerprint({"model": "a"}), keys.config_fingerprint({"model": "b"})
+    assert keys.file_key(one, "a.py", "", [], []) != keys.file_key(two, "a.py", "", [], [])
+    assert keys.module_key(one, ".", [], "", []) != keys.module_key(two, ".", [], "", [])
+    assert keys.project_key(one, None, [], "", []) != keys.project_key(two, None, [], "", [])
+
+
+def test_key_functions_accept_odd_input() -> None:
+    assert len(keys.module_key("c", ".", [], "", [])) == 64
+    assert len(keys.project_key("c", None, [], "", [])) == 64
+    assert len(keys.file_key("c", "ü/ä.py", "", [], [])) == 64

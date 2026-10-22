@@ -129,7 +129,10 @@ def test_auth_failure_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyP
     before = snapshot_tree(tmp_path)
     result = run_cli(["scan", str(tmp_path)])
     assert result.exit_code == 1
-    assert snapshot_tree(tmp_path) == before
+    # The cache is opened before the first call (task 07), so an empty,
+    # self-ignoring .codewhy/ may exist; no output document is written.
+    after = {path: data for path, data in snapshot_tree(tmp_path).items() if not path.startswith(".codewhy/")}
+    assert after == before
 
 
 def test_handwritten_output_refusal_leaves_tree_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,7 +193,7 @@ def test_summary_line_counts_and_skip_lines_come_first(tmp_path: Path, monkeypat
 
     # 4 discovered files (syntax_error.py among them), 3 healthy passes + 1 module + project.
     assert lines[-1] == (
-        f"4 files, 5 generated, 0 cached, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens)} tokens (level 0)."
+        f"4 files, 0 cached, 5 generated, 0 failed, 3 skipped. PROJECT_DOCS.md ≈ {estimate_tokens(tokens)} tokens (level 0)."
     )
 
 
@@ -268,7 +271,7 @@ def test_all_failed_run_still_writes_placeholders_and_exits_2(tmp_path: Path, mo
     install_fake(monkeypatch, FakeProvider(respond=lambda call: TransientError("down")))
     result = run_cli(["scan", str(tmp_path), "--quiet"])
     assert result.exit_code == 2
-    assert ", 0 generated, 0 cached, 3 failed, 0 skipped." in result.stdout
+    assert ", 0 cached, 0 generated, 3 failed, 0 skipped." in result.stdout
     assert (tmp_path / "PROJECT_DOCS.md").read_text(encoding="utf-8").count("[generation failed]") >= 3
 
 

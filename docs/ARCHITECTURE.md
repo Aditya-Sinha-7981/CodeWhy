@@ -472,6 +472,9 @@ CREATE TABLE pass_cache (
   - **project**: entry point (or null), for each module
     `(path, Responsibility text)`, the canonical project edge list, the capped
     list of other-file paths used in the prompt.
+  - Module and project texts are taken **as sent to the model** after the
+    overflow ladder, together with the ladder's count of omitted members, so
+    anything the ladder changes in the prompt also changes the key.
 
 Lookup: a row for `(pass, subject)` whose `input_key` equals the current key is
 a hit; anything else is a miss (run the pass, upsert the row). `--full`
